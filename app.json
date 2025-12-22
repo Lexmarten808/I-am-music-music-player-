@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "I am music",
+    "slug": "i-am-music",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {},
+    "web": {
+      "plugins": [
+        "expo-asset"
+      ]
+    },
+    "plugins": [
+      "expo-audio",
+      "expo-video",
+      "expo-sqlite"
+    ]
+  }
+}
