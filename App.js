@@ -24,5 +24,5 @@ const cargarApp = async () => {
         canciones = await miSongManager.scanFolder('ruta/a/tu/musica');
     }
 
-    console.log("Canciones listas para mostrar:", canciones.length);
+    console.log("songs ready to show:", canciones.length);
 };

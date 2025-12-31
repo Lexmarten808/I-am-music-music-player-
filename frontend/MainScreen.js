@@ -1,64 +1,84 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image } from 'react-native';
+import React, { useState, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList } from 'react-native';
+import SongItem from './SongItem';
 // Importamos FileSystem para usar el selector de carpetas
 import * as FileSystem from 'expo-file-system/legacy'; 
 import SongManager from '../classes/SongManager';
 import DatabaseManager from '../classes/DatabaseManager';
-
 const db = new DatabaseManager();
 const songManager = new SongManager(db);
 
 export default function MainScreen() {
   const [songs, setSongs] = useState([]);
   const [loading, setLoading] = useState(false);
+  const loadingRef = useRef(new Set());
+  const [scanCount, setScanCount] = useState(0);
+  
 
-  const seleccionarCarpeta = async () => {
-    try {
-      // 1. Pedir permiso para acceder a una carpeta específica
-      const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
-      
-      if (permissions.granted) {
-        setLoading(true);
-        
-        // 2. La URI de la carpeta seleccionada
-        const folderUri = permissions.directoryUri;
-        
-        // 3. Escanear la carpeta (Asegúrate de haber cambiado el import en SongManager.js a /legacy)
-        const cancionesEncontradas = await songManager.scanFolder(folderUri);
-        
-        setSongs(cancionesEncontradas);
-        setLoading(false);
+const seleccionarCarpeta = async () => {
+  const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+  
+  if (permissions.granted) {
+    setLoading(true);
+    const folderUri = permissions.directoryUri;
+    
+    // we send 'setSongs' as the "notifier" (onUpdate)
+    // So, each time SongManager finishes a song, it will automatically call setSongs
+    const initialSongs = await songManager.scanFolder(folderUri, (updatedList) => {
+        setSongs(updatedList); 
+        setScanCount(updatedList.length || 0);
+    });
+    
+    setSongs(initialSongs);
+    setScanCount(initialSongs.length || 0);
+    setLoading(false);
+  }
+};
+
+  const renderItem = ({ item }) => <SongItem item={item} />;
+  // Debounced view handler to avoid flooding with loads while scrolling
+  const viewBufferRef = useRef(null);
+  const pendingVisibleRef = useRef([]);
+
+  const processVisibleItems = async () => {
+    const items = pendingVisibleRef.current.splice(0, pendingVisibleRef.current.length);
+    for (const { item } of items) {
+      if (!item) continue;
+      if (loadingRef.current.has(item.id)) continue;
+      if (!item.cover || item.artist === 'Leyendo...' || item.artist === 'Artista Desconocido') {
+        loadingRef.current.add(item.id);
+        try {
+          const updated = await songManager.loadCoverOnDemand(item);
+          setSongs(prev => prev.map(s => (s.id === updated.id ? updated : s)));
+        } catch (e) {
+          console.warn('loadCoverOnDemand error', e);
+        } finally {
+          loadingRef.current.delete(item.id);
+        }
       }
-    } catch (err) {
-      console.log("Error al seleccionar carpeta:", err);
-      setLoading(false);
     }
   };
 
-  const renderItem = ({ item }) => (
-    <View style={styles.songCard}>
-      <Image 
-        source={item.cover ? { uri: item.cover } : { uri: 'https://via.placeholder.com/50' }} 
-        style={styles.albumArt} 
-      />
-      <View style={styles.songInfo}>
-        <Text style={styles.title}>{item.title || "Canción desconocida"}</Text>
-        <Text style={styles.artist}>{item.artist || "Artista desconocido"}</Text>
-      </View>
-      {/* Verificamos que getFormattedDuration exista antes de llamarlo */}
-      <Text style={styles.duration}>
-        {item.getFormattedDuration ? item.getFormattedDuration() : "0:00"}
-      </Text>
-    </View>
-  );
+  const onViewableItemsChanged = useRef(({ viewableItems }) => {
+    // accumulate and debounce
+    pendingVisibleRef.current = pendingVisibleRef.current.concat(viewableItems);
+    if (viewBufferRef.current) clearTimeout(viewBufferRef.current);
+    viewBufferRef.current = setTimeout(() => { processVisibleItems(); viewBufferRef.current = null; }, 150);
+  }).current;
 
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 80 }).current;
+
+  // Improve FlatList virtualization by providing item layout (fixed height)
+  const ITEM_HEIGHT = 70; // matches songCard padding + albumArt size
+  const getItemLayout = (_data, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index });
   return (
     <View style={styles.container}>
       <Text style={styles.header}>Mi Reproductor</Text>
+      <Text style={{color: '#ccc', textAlign: 'center', marginBottom: 8}}>Songs: {scanCount}</Text>
       
       <TouchableOpacity style={styles.button} onPress={seleccionarCarpeta}>
         <Text style={styles.buttonText}>
-          {loading ? "Escaneando..." : "Seleccionar Carpeta de Música"}
+          {loading ? "Scanning..." : "Select Music Folder"}
         </Text>
       </TouchableOpacity>
 
@@ -66,6 +86,9 @@ export default function MainScreen() {
         data={songs}
         keyExtractor={(item, index) => item.id ? item.id.toString() : index.toString()}
         renderItem={renderItem}
+        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={viewabilityConfig}
+        getItemLayout={getItemLayout}
         contentContainerStyle={{ paddingBottom: 20 }}
         ListEmptyComponent={<Text style={{color: '#666', textAlign: 'center'}}>No hay canciones cargadas</Text>}
       />

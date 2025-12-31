@@ -11,7 +11,13 @@
     "ios": {
       "supportsTablet": true
     },
-    "android": {},
+    "android": {
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
+      "package": "com.brandon_lasprilla.iammusic"
+    },
     "web": {
       "plugins": [
         "expo-asset"
@@ -21,6 +27,11 @@
       "expo-audio",
       "expo-video",
       "expo-sqlite"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "c309f9a5-b08b-4213-81e3-1b642bae6c80"
+      }
+    }
   }
 }

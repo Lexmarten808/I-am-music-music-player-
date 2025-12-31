@@ -1,0 +1,14 @@
+# Exclude Expo local state and other transient files from build uploads
+.expo/
+node_modules/
+*.log
+.DS_Store
+tmp/
+coverage/
+/.git/
+/.vscode/
+*.keystore
+*.p12
+*.jks
+*.bak
+thumbs.db
