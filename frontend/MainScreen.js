@@ -35,7 +35,12 @@ const seleccionarCarpeta = async () => {
   }
 };
 
-  const renderItem = ({ item }) => <SongItem item={item} />;
+  const renderItem = ({ item }) => (
+  <SongItem 
+    item={item} 
+      songManager={songManager} 
+  />
+);
   // Debounced view handler to avoid flooding with loads while scrolling
   const viewBufferRef = useRef(null);
   const pendingVisibleRef = useRef([]);
@@ -89,9 +94,25 @@ const seleccionarCarpeta = async () => {
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
         getItemLayout={getItemLayout}
-        contentContainerStyle={{ paddingBottom: 20 }}
+        contentContainerStyle={{ paddingBottom: 100 }}
         ListEmptyComponent={<Text style={{color: '#666', textAlign: 'center'}}>No hay canciones cargadas</Text>}
       />
+      {songs && songs.length > 0 && (
+        <View style={styles.playbackBar}>
+          <TouchableOpacity style={[styles.controlButton]} onPress={() => { /* prev */ }} accessibilityLabel="previous">
+            <Text style={styles.controlText}>Prev</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.controlButton]} onPress={() => { /* stop/pause */ }} accessibilityLabel="stop">
+            <Text style={styles.controlText}>Pause</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.controlButton]} onPress={() => { /* next */ }} accessibilityLabel="next">
+            <Text style={styles.controlText}>Next</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.controlButton]} onPress={() => { /* shuffle */ }} accessibilityLabel="shuffle">
+            <Text style={styles.controlText}>Shuffle</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 }
@@ -108,4 +129,36 @@ const styles = StyleSheet.create({
   title: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   artist: { color: '#aaa', fontSize: 14 },
   duration: { color: '#666', fontSize: 12 }
+  ,
+  playbackBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 80,
+    backgroundColor: '#181818',
+    borderTopColor: '#222',
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingHorizontal: 10,
+    paddingBottom: 6
+  },
+  controlButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: '#2b2b2b',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 6
+  },
+  controlText: {
+    fontSize: 14,
+    color: '#fff',
+    fontWeight: '600'
+  }
 });

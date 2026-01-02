@@ -6,7 +6,9 @@ import Song from './Song';
 export default class SongManager {
   constructor(dbManager) {
     this.db = dbManager;
+    this.queuedSongs = [];
   }
+  
 
   // quick scan of a folder to find audio files
   async scanFolder(folderUri, onUpdate) {
@@ -14,12 +16,16 @@ export default class SongManager {
     try {
       // We use SAF to get the list of files (most compatible on Android)
       const files = await FileSystem.StorageAccessFramework.readDirectoryAsync(folderUri);
-      const audioFiles = files.filter(f => f.toLowerCase().endsWith('.mp3'));
+      const audioFiles = files.filter(f => f.toLowerCase().endsWith('.mp3')|| f.toLowerCase().endsWith('.wav'));
+
+      if (audioFiles.length === 0) {
+        throw new Error("No audio files found in " + folderUri);
+      }
       
       // 1. Quick mapping: file names so the user sees something immediately
       const songs = audioFiles.map(uri => {
         const rawName = uri.split('%2F').pop();
-        const name = decodeURIComponent(rawName).replace(/\.mp3$/i, '');
+        const name = decodeURIComponent(rawName).replace(/\.mp3$/i, '')|| decodeURIComponent(rawName).replace(/\.wav$/i, '');
         return new Song({ 
           id: uri, 
           title: name, 
@@ -112,7 +118,8 @@ export default class SongManager {
       }
 
       // Force UI update immediately for this item
-      try { if (this._onUpdate) this._onUpdate([...this.allSongs || songs]); } catch (e) { /* ignore */ }
+      if (i % 20 === 0 || i === songs.length - 1) {
+      this._onUpdate([...this.allSongs]);}
     }
   }
   
