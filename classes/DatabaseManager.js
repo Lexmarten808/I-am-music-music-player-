@@ -194,35 +194,4 @@ export default class DatabaseManager {
       return Array.from(this._memorySongs);
     }
   }
-  async getSongById(id) {
-  await this._ready;
-  try {
-    if (this._useMemoryFallback || !this.db) {
-      return this._memorySongs.find(s => s.id === id) || null;
-    }
-
-    // Usar la API más moderna si está disponible
-    if (typeof this.db.getFirstAsync === 'function') {
-      return await this.db.getFirstAsync('SELECT * FROM songs WHERE id = ?', [id]);
-    }
-
-    // Fallback para versiones antiguas de expo-sqlite
-    return new Promise((resolve) => {
-      this.db.transaction(tx => {
-        tx.executeSql(
-          'SELECT * FROM songs WHERE id = ?',
-          [id],
-          (_, result) => {
-            if (result.rows.length > 0) resolve(result.rows.item(0));
-            else resolve(null);
-          },
-          () => resolve(null)
-        );
-      });
-    });
-  } catch (e) {
-    console.error("Error en getSongById:", e);
-    return null;
-  }
-}
 }
