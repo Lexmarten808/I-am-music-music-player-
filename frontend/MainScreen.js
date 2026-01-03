@@ -14,6 +14,18 @@ export default function MainScreen() {
   const loadingRef = useRef(new Set());
   const [scanCount, setScanCount] = useState(0);
   
+useEffect(() => {
+  const restoreLastSession = async () => {
+    const lastFolder = await AsyncStorage.getItem('last_music_folder');
+
+    if (lastFolder) {
+      const songs = await songManager.scanFolder(lastFolder, setSongs);
+      setSongs(songs);
+    }
+  };
+
+  restoreLastSession();
+}, []);
 
 const seleccionarCarpeta = async () => {
   const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();

@@ -2,125 +2,176 @@ import { Buffer } from 'buffer';
 import * as FileSystem from 'expo-file-system';
 import jsmediatags from 'jsmediatags/dist/jsmediatags.min.js';
 import Song from './Song';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const LAST_FOLDER_KEY = 'last_music_folder';
+
+
+const START_CHUNK = 128 * 1024; // rápido
+const END_CHUNK   = 256 * 1024; // fallback seguro
+const CONCURRENCY = 4;          // Android safe
 
 export default class SongManager {
   constructor(dbManager) {
     this.db = dbManager;
-    this.queuedSongs = [];
+    this.allSongs = [];
+    this._onUpdate = null;
   }
-  
 
-  // quick scan of a folder to find audio files
+  /* =========================
+     SCAN FOLDER (FAST)
+  ========================== */
   async scanFolder(folderUri, onUpdate) {
-    
     try {
-      // We use SAF to get the list of files (most compatible on Android)
+      // save the last folder
+      await AsyncStorage.setItem(LAST_FOLDER_KEY, folderUri);
+      //reads the directory
       const files = await FileSystem.StorageAccessFramework.readDirectoryAsync(folderUri);
-      const audioFiles = files.filter(f => f.toLowerCase().endsWith('.mp3')|| f.toLowerCase().endsWith('.wav'));
+      //filter audio files (only reads mp3 and wav for now)
+      const audioFiles = files.filter(
+        f => f.toLowerCase().endsWith('.mp3') || f.toLowerCase().endsWith('.wav')
+      );
+      // in case no audio files found
+      if (!audioFiles.length) throw new Error('No audio files');
 
-      if (audioFiles.length === 0) {
-        throw new Error("No audio files found in " + folderUri);
-      }
-      
-      // 1. Quick mapping: file names so the user sees something immediately
       const songs = audioFiles.map(uri => {
-        const rawName = uri.split('%2F').pop();
-        const name = decodeURIComponent(rawName).replace(/\.mp3$/i, '')|| decodeURIComponent(rawName).replace(/\.wav$/i, '');
-        return new Song({ 
-          id: uri, 
-          title: name, 
-          artist: 'Loading...', 
-          uri: uri 
+        const raw = uri.split('%2F').pop();
+        //remove the extencion from the name
+        const name = decodeURIComponent(raw).replace(/\.(mp3|wav|Y2meta|.app)$/i, '');
+        return new Song({
+          id: uri,
+          title: name,
+          artist: 'Loading...',
+          uri
         });
       });
-
-      // Keep a reference to the list and the update callback so we can force
-      // UI updates when individual metadata items finish.
+      // store all songs
       this.allSongs = songs;
+      // store the onUpdate callback
       this._onUpdate = onUpdate;
 
-      // 2. Start the heavy process in the background
-      this.processMetadatosEnLotes(songs, onUpdate);
+      // background processing
+      this.processMetadatosEnLotes(songs);
 
       return songs;
     } catch (e) {
-      console.error("Error en scanFolder:", e);
+      console.error('scanFolder error:', e);
       return [];
     }
   }
 
-  
-async getTags(uri, fileName) {
-  try {
-    // Read only the first 64 KB
-    const CHUNK_SIZE = 256 * 1024;
-
-    const base64Chunk = await FileSystem.readAsStringAsync(uri, {
-      encoding: FileSystem.EncodingType.Base64,
-      length: CHUNK_SIZE,
-      position: 0
-    });
-
-    const byteArray = Array.from(Buffer.from(base64Chunk, 'base64'));
-
-    return await new Promise((resolve) => {
-      jsmediatags.read(byteArray, {
-        onSuccess: (tag) => {
-          let cover = null;
-
-          if (tag.tags?.picture) {
-            const { data, format } = tag.tags.picture;
-            cover = `data:${format};base64,${Buffer.from(data).toString('base64')}`;
-          }
-
-          resolve({
-            title: tag.tags?.title || fileName,
-            artist: tag.tags?.artist || "Unknown Artist",
-            album: tag.tags?.album || "Unknown Album",
-            cover
-          });
-        },
-        onError: () => {
-          resolve({
-            title: fileName,
-            artist: "Unknown Artist",
-            album: "Unknown Album",
-            cover: null
-          });
-        }
-      });
-    });
-  } catch {
-    return {
-      title: fileName,
-      artist: "Unknown Artist",
-      album: "Unknown Album",
-      cover: null
-    };
+  /* =========================
+     TAG HELPERS
+  ========================== */
+  isMetaIncomplete(meta) {
+    return (
+      !meta ||
+      !meta.artist ||
+      meta.artist === 'Unknown Artist' ||
+      !meta.cover
+    );
   }
-}
 
-  // the list updates slowly, so we process them in batches
-  async processMetadatosEnLotes(songs, onUpdate) {
-    for (let i = 0; i < songs.length; i++) {   
-      const meta = await this.getTags(songs[i].uri, songs[i].title);
+  async readChunk(uri, fileName, position, size) {
+    try {
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+        length: size,
+        position
+      });
 
-      // Update the in-memory list item (create new ref so React notices)
-      const updated = new Song({ id: songs[i].id || songs[i].uri, title: meta.title, artist: meta.artist, album: meta.album, uri: songs[i].uri, duration: songs[i].duration, cover: meta.cover });
-      songs[i] = updated;
-      if (this.allSongs && Array.isArray(this.allSongs)) {
-        const idx = this.allSongs.findIndex(s => s.id === updated.id);
-        if (idx >= 0) this.allSongs[idx] = updated;
-      }
+      const bytes = Array.from(Buffer.from(base64, 'base64'));
 
-      // Save metadata (note: DatabaseManager is not storing cover)
-      if (this.db) {
-        this.db.saveSong(updated).catch(e => console.log("Error guardando:", e));
-      }
+      return await new Promise(resolve => {
+        jsmediatags.read(bytes, {
+          onSuccess: tag => {
+            let cover = null;
+            if (tag.tags?.picture) {
+              const { data, format } = tag.tags.picture;
+              cover = `data:${format};base64,${Buffer.from(data).toString('base64')}`;
+            }
 
-      // Force UI update immediately for this item
-      if (this._onUpdate) this._onUpdate([...this.allSongs]);
+            resolve({
+              title: tag.tags?.title || fileName,
+              artist: tag.tags?.artist || 'Unknown Artist',
+              album: tag.tags?.album || 'Unknown Album',
+              cover
+            });
+          },
+          onError: () => resolve(null)
+        });
+      });
+    } catch {
+      return null;
     }
   }
-  
+
+  async readFromEnd(uri, fileName) {
+    try {
+      const info = await FileSystem.getInfoAsync(uri);
+      if (!info.size) return null;
+
+      const pos = Math.max(0, info.size - END_CHUNK);
+      return this.readChunk(uri, fileName, pos, END_CHUNK);
+    } catch {
+      return null;
+    }
+  }
+
+  /* =========================
+     SMART TAG READER
+  ========================== */
+  async getTags(uri, fileName) {
+    // 1️⃣ fast read (start)
+    const startMeta = await this.readChunk(uri, fileName, 0, START_CHUNK);
+    if (startMeta && !this.isMetaIncomplete(startMeta)) return startMeta;
+
+    // 2️⃣ fallback (end)
+    const endMeta = await this.readFromEnd(uri, fileName);
+    if (endMeta && !this.isMetaIncomplete(endMeta)) return endMeta;
+
+    // 3️⃣ merge best of both
+    return {
+      title: startMeta?.title || endMeta?.title || fileName,
+      artist: startMeta?.artist || endMeta?.artist || 'Unknown Artist',
+      album: startMeta?.album || endMeta?.album || 'Unknown Album',
+      cover: startMeta?.cover || endMeta?.cover || null
+    };
+  }
+
+  /* =========================
+     CONCURRENT PROCESSING
+  ========================== */
+  async processMetadatosEnLotes(songs) {
+    let index = 0;
+
+    const worker = async () => {
+      while (index < songs.length) {
+        const i = index++;
+        const song = songs[i];
+
+        const meta = await this.getTags(song.uri, song.title);
+
+        const updated = new Song({
+          ...song,
+          title: meta.title,
+          artist: meta.artist,
+          album: meta.album,
+          cover: meta.cover
+        });
+
+        songs[i] = updated;
+        this.allSongs[i] = updated;
+
+        this.db?.saveSong(updated).catch(() => {});
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: CONCURRENCY }, worker)
+    );
+
+    // 🔥 single UI update
+    this._onUpdate?.([...this.allSongs]);
+  }
 }

@@ -28,7 +28,8 @@
     "expo-video": "~3.0.15",
     "jsmediatags": "^3.9.7",
     "react": "19.1.0",
-    "react-native": "0.81.5"
+    "react-native": "0.81.5",
+    "@react-native-async-storage/async-storage": "2.2.0"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0"
