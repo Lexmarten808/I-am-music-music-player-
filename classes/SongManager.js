@@ -50,58 +50,59 @@ export default class SongManager {
   }
 
   
-  async getTags(uri, fileName) {
-    // Force UI update immediately for this item
-      try { if (this._onUpdate) this._onUpdate([...this.allSongs || songs]); } catch (e) { /* ignore */ }
-    return new Promise(async (resolve) => {
-      try {
-        // Read the file as base64
-        const base64 = await FileSystem.readAsStringAsync(uri, {
-          encoding: FileSystem.EncodingType.Base64
-        });
+async getTags(uri, fileName) {
+  try {
+    // Read only the first 64 KB
+    const CHUNK_SIZE = 256 * 1024;
 
-        // Decode to bytes and pass a plain JS array so jsmediatags' ArrayFileReader
-        // can detect it in React Native environments.
-        const byteBuffer = Buffer.from(base64, 'base64');
-        const byteArray = Array.from(byteBuffer);
-
-        try {
-          new jsmediatags.Reader(byteArray).read({
-            onSuccess: (tag) => {
-              let cover = null;
-              if (tag.tags && tag.tags.picture) {
-                const { data, format } = tag.tags.picture;
-                const base64String = Buffer.from(data).toString('base64');
-                cover = `data:${format};base64,${base64String}`;
-              }
-
-              // Return cover for in-memory UI use. We will not persist it in DB.
-              resolve({
-                title: tag.tags && tag.tags.title ? tag.tags.title : fileName,
-                artist: tag.tags && tag.tags.artist ? tag.tags.artist : "Unknown Artist",
-                album: tag.tags && tag.tags.album ? tag.tags.album : "Unknown Album",
-                cover
-              });
-            },
-            onError: (error) => {
-              // If parsing fails asynchronously, return safe defaults.
-              resolve({ title: fileName, artist: "Unknown Artist", album: "Unknown Album", cover: null });
-            }
-          });
-        } catch (syncErr) {
-          // jsmediatags may throw synchronously in some RN setups; handle gracefully.
-          resolve({ title: fileName, artist: "Unknown Artist", album: "Unknown Album", cover: null });
-        }
-      } catch (e) {
-        resolve({ title: fileName, artist: "Read Error", album: "Unknown Album", cover: null });
-      }
+    const base64Chunk = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+      length: CHUNK_SIZE,
+      position: 0
     });
-    
+
+    const byteArray = Array.from(Buffer.from(base64Chunk, 'base64'));
+
+    return await new Promise((resolve) => {
+      jsmediatags.read(byteArray, {
+        onSuccess: (tag) => {
+          let cover = null;
+
+          if (tag.tags?.picture) {
+            const { data, format } = tag.tags.picture;
+            cover = `data:${format};base64,${Buffer.from(data).toString('base64')}`;
+          }
+
+          resolve({
+            title: tag.tags?.title || fileName,
+            artist: tag.tags?.artist || "Unknown Artist",
+            album: tag.tags?.album || "Unknown Album",
+            cover
+          });
+        },
+        onError: () => {
+          resolve({
+            title: fileName,
+            artist: "Unknown Artist",
+            album: "Unknown Album",
+            cover: null
+          });
+        }
+      });
+    });
+  } catch {
+    return {
+      title: fileName,
+      artist: "Unknown Artist",
+      album: "Unknown Album",
+      cover: null
+    };
   }
+}
 
   // the list updates slowly, so we process them in batches
   async processMetadatosEnLotes(songs, onUpdate) {
-    for (let i = 0; i < songs.length; i++) {
+    for (let i = 0; i < songs.length; i++) {   
       const meta = await this.getTags(songs[i].uri, songs[i].title);
 
       // Update the in-memory list item (create new ref so React notices)
@@ -118,8 +119,7 @@ export default class SongManager {
       }
 
       // Force UI update immediately for this item
-      if (i % 20 === 0 || i === songs.length - 1) {
-      this._onUpdate([...this.allSongs]);}
+      if (this._onUpdate) this._onUpdate([...this.allSongs]);
     }
   }
   
