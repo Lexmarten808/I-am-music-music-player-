@@ -39,7 +39,25 @@ export default class Song {
   async load() {
     if (!this.sound) {
       this.sound = new Audio.Sound();
-      await this.sound.loadAsync({ uri: this.uri }, {}, true);
+
+await this.sound.loadAsync(
+  { uri: this.uri },
+  { shouldPlay: false },
+  true
+);
+
+// 🔥 sync playback + end detection
+this.sound.setOnPlaybackStatusUpdate((status) => {
+  if (!status.isLoaded) return;
+
+  this.isPlaying = status.isPlaying;
+
+  if (status.didJustFinish) {
+    this.isPlaying = false;
+    clearInterval(this._progressInterval);
+    if (this.onEnded) this.onEnded(this);
+  }
+});
       const status = await this.sound.getStatusAsync();
       if (!this.duration && status.durationMillis) {
         this.duration = status.durationMillis / 1000;
@@ -47,25 +65,24 @@ export default class Song {
     }
   }
 
-  async play() {
-    await this.load();
-    if (!this.isPlaying) {
-      await this.sound.playAsync();
-      this.isPlaying = true;
-
-      this._progressInterval = setInterval(async () => {
-        if (this.onProgress) {
-          const status = await this.sound.getStatusAsync();
-          this.onProgress(status.positionMillis / 1000, this.duration);
-          if (status.didJustFinish) {
-            this.isPlaying = false;
-            clearInterval(this._progressInterval);
-            if (this.onEnded) this.onEnded(this);
-          }
-        }
-      }, 500);
-    }
+ async play() {
+  if (this.sound) {
+    await this.stop();
   }
+
+  const { sound } = await Audio.Sound.createAsync(
+    { uri: this.uri },
+    { shouldPlay: true },
+    status => {
+      if (status.didJustFinish && this._onEnded) {
+        this._onEnded();
+      }
+    }
+  );
+
+  this.sound = sound;
+  this.isPlaying = true;
+}
 
   async pause() {
     if (this.sound && this.isPlaying) {
@@ -74,14 +91,24 @@ export default class Song {
       clearInterval(this._progressInterval);
     }
   }
-
-  async stop() {
-    if (this.sound) {
-      await this.sound.stopAsync();
-      this.isPlaying = false;
-      clearInterval(this._progressInterval);
+  async togglePlayPause() {
+    if (this.isPlaying) {
+      await this.pause();
+    } else {
+      await this.play();
     }
   }
+async stop() {
+  if (this.sound) {
+    try {
+      await this.sound.stopAsync();
+      await this.sound.unloadAsync(); 
+    } catch {}
+    this.sound = null;
+    this.isPlaying = false;
+  }
+}
+
 
   async seek(seconds) {
     if (this.sound) {

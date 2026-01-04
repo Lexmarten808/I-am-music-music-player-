@@ -89,8 +89,8 @@ export default class DatabaseManager {
       String(song.album || 'Unknown Album'),
       String(song.uri || ''),
       Number(song.duration || 0),
-      // Do not store cover binary/data in SQLite (keeps DB small). Store null.
-      null
+      song.cover || null
+      
     ];
 
     const sql = 'INSERT OR REPLACE INTO songs (id, title, artist, album, uri, duration, cover) VALUES (?, ?, ?, ?, ?, ?, ?);';

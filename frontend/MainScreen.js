@@ -1,6 +1,10 @@
-import React, { useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList } from 'react-native';
+import React, { useState, useRef, useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList,Image } from 'react-native';
 import SongItem from './SongItem';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Audio } from 'expo-av';
+import { MaterialIcons } from '@expo/vector-icons';
+
 // Importamos FileSystem para usar el selector de carpetas
 import * as FileSystem from 'expo-file-system/legacy'; 
 import SongManager from '../classes/SongManager';
@@ -8,24 +12,130 @@ import DatabaseManager from '../classes/DatabaseManager';
 const db = new DatabaseManager();
 const songManager = new SongManager(db);
 
+
 export default function MainScreen() {
+  const shuffleRef = useRef(false);
+
   const [songs, setSongs] = useState([]);
   const [loading, setLoading] = useState(false);
   const loadingRef = useRef(new Set());
   const [scanCount, setScanCount] = useState(0);
-  
-useEffect(() => {
-  const restoreLastSession = async () => {
-    const lastFolder = await AsyncStorage.getItem('last_music_folder');
+  const [currentSong, setCurrentSong] = useState(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentIndex, setCurrentIndex] = useState(-1);
+  const [isShuffle, setIsShuffle] = useState(false);
+  const [history, setHistory] = useState([]);
 
+  
+
+
+ useEffect(() => {
+  const setupAudio = async () => {
+    await Audio.setAudioModeAsync({
+      staysActiveInBackground: true,
+      playsInSilentModeIOS: true,
+      shouldDuckAndroid: true,
+      interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX,
+    });
+  };
+
+  setupAudio();
+}, []); 
+useEffect(() => {
+  const restore = async () => {
+    // 1️⃣ try DB first
+    const cached = await songManager.loadFromCache(setSongs);
+    if (cached.length) return;
+
+    // 2️⃣ fallback to last folder
+    const lastFolder = await AsyncStorage.getItem('last_music_folder');
     if (lastFolder) {
       const songs = await songManager.scanFolder(lastFolder, setSongs);
       setSongs(songs);
     }
   };
 
-  restoreLastSession();
+  restore();
 }, []);
+const handleSongPress = async (song) => {
+  const index = songs.findIndex(s => s.id === song.id);
+
+  // same song → toggle
+  if (currentIndex === index) {
+    await song.togglePlayPause();
+    setIsPlaying(song.isPlaying);
+    return;
+  }
+
+  // stop old song
+  if (currentSong) {
+    await currentSong.stop();
+  }
+
+  // play new song
+  await song.play();
+  song.setOnEnded(handleNext);
+
+  setCurrentSong(song);
+  setCurrentIndex(index);
+  setIsPlaying(true);
+};
+
+// next button logig
+const handleNext = async () => {
+  if (!songs.length) return;
+
+  let nextIndex;
+
+  if (shuffleRef.current) {
+    do {
+    nextIndex = Math.floor(Math.random() * songs.length);
+  } while (nextIndex === currentIndex && songs.length > 1);
+
+    setHistory(prev => [...prev, currentIndex]);
+  } else {
+    nextIndex = (currentIndex + 1) % songs.length;
+  }
+
+  const nextSong = songs[nextIndex];
+
+  if (currentSong) await currentSong.stop();
+
+  await nextSong.play();
+  nextSong.setOnEnded(handleNext);
+
+  setCurrentSong(nextSong);
+  setCurrentIndex(nextIndex);
+  setIsPlaying(true);
+};
+
+//prev button logic
+
+const handlePrev = async () => {
+  if (!songs.length) return;
+
+  let prevIndex;
+
+  if (shuffleRef.current && history.length) {
+    prevIndex = history[history.length - 1];
+    setHistory(h => h.slice(0, -1));
+  } else {
+    prevIndex =
+      currentIndex === 0 ? songs.length - 1 : currentIndex - 1;
+  }
+
+  const prevSong = songs[prevIndex];
+
+  if (currentSong) await currentSong.stop();
+
+  await prevSong.play();
+  prevSong.setOnEnded(handleNext);
+
+  setCurrentSong(prevSong);
+  setCurrentIndex(prevIndex);
+  setIsPlaying(true);
+};
+
 
 const seleccionarCarpeta = async () => {
   const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
@@ -47,12 +157,16 @@ const seleccionarCarpeta = async () => {
   }
 };
 
+
+
+
   const renderItem = ({ item }) => (
   <SongItem 
-    item={item} 
-      songManager={songManager} 
+    item={item}
+    onPress={() => handleSongPress(item)}
   />
 );
+
   // Debounced view handler to avoid flooding with loads while scrolling
   const viewBufferRef = useRef(null);
   const pendingVisibleRef = useRef([]);
@@ -109,22 +223,74 @@ const seleccionarCarpeta = async () => {
         contentContainerStyle={{ paddingBottom: 100 }}
         ListEmptyComponent={<Text style={{color: '#666', textAlign: 'center'}}>No hay canciones cargadas</Text>}
       />
-      {songs && songs.length > 0 && (
-        <View style={styles.playbackBar}>
-          <TouchableOpacity style={[styles.controlButton]} onPress={() => { /* prev */ }} accessibilityLabel="previous">
-            <Text style={styles.controlText}>Prev</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.controlButton]} onPress={() => { /* stop/pause */ }} accessibilityLabel="stop">
-            <Text style={styles.controlText}>Pause</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.controlButton]} onPress={() => { /* next */ }} accessibilityLabel="next">
-            <Text style={styles.controlText}>Next</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.controlButton]} onPress={() => { /* shuffle */ }} accessibilityLabel="shuffle">
-            <Text style={styles.controlText}>Shuffle</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      {currentSong && (
+  <View style={styles.playbackBar}>
+    
+    {/* Cover */}
+    {currentSong.cover ? (
+      <View>
+        <Text />
+        <Image
+          source={{ uri: currentSong.cover }}
+          style={styles.barCover}
+        />
+      </View>
+    ) : (
+      <View style={[styles.barCover, styles.noCover]} />
+    )}
+
+    {/* Song info */}
+    <View style={styles.barInfo}>
+      <Text style={styles.barTitle} numberOfLines={1}>
+        {currentSong.title}
+      </Text>
+      <Text style={styles.barArtist} numberOfLines={1}>
+        {currentSong.artist}
+      </Text>
+    </View>
+
+    {/* Controls */}
+    <View style={styles.barControls}>
+      <TouchableOpacity onPress={handlePrev}>
+        <Text style={styles.controlText}>⏮</Text>
+      </TouchableOpacity>
+
+
+      <TouchableOpacity
+        onPress={async () => {
+          await currentSong.togglePlayPause();
+          setIsPlaying(currentSong.isPlaying);
+        }}
+      >
+        <Text style={styles.controlText}>
+          {isPlaying ? '⏸' : '▶️'}
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity onPress={handleNext}>
+        <Text style={styles.controlText}>⏭</Text>
+      </TouchableOpacity>
+
+    </View>
+      <TouchableOpacity
+        onPress={() => {
+          setIsShuffle(s => {
+            const next = !s;
+            shuffleRef.current = next;
+            return next;
+          });
+        }}
+      >
+        <MaterialIcons
+          name="shuffle"
+          size={24}
+          color={isShuffle ? '#1DB954' : '#fff'}
+        />
+      </TouchableOpacity>
+
+
+  </View>
+)}
     </View>
   );
 }
@@ -172,5 +338,38 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#fff',
     fontWeight: '600'
-  }
+  },
+  barCover: {
+  width: 50,
+  height: 50,
+  borderRadius: 6,
+  backgroundColor: '#333'
+},
+
+noCover: {
+  backgroundColor: '#222'
+},
+
+barInfo: {
+  flex: 1,
+  marginHorizontal: 10
+},
+
+barTitle: {
+  color: '#fff',
+  fontSize: 14,
+  fontWeight: 'bold'
+},
+
+barArtist: {
+  color: '#aaa',
+  fontSize: 12
+},
+
+barControls: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 12
+},
+
 });

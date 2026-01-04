@@ -11,11 +11,18 @@ const START_CHUNK = 128 * 1024; // rápido
 const END_CHUNK   = 256 * 1024; // fallback seguro
 const CONCURRENCY = 4;          // Android safe
 
+
+
 export default class SongManager {
   constructor(dbManager) {
     this.db = dbManager;
     this.allSongs = [];
     this._onUpdate = null;
+
+
+    
+    //callbacks
+    this._onSongChange = null;
   }
 
   /* =========================
@@ -47,6 +54,8 @@ export default class SongManager {
       });
       // store all songs
       this.allSongs = songs;
+      // reset current index
+      this.currentIndex = 0;
       // store the onUpdate callback
       this._onUpdate = onUpdate;
 
@@ -152,18 +161,12 @@ export default class SongManager {
 
         const meta = await this.getTags(song.uri, song.title);
 
-        const updated = new Song({
-          ...song,
-          title: meta.title,
-          artist: meta.artist,
-          album: meta.album,
-          cover: meta.cover
-        });
+        song.setTitle(meta.title);
+        song.setArtist(meta.artist);
+        song.setAlbum(meta.album);
+        song.setCover(meta.cover);
 
-        songs[i] = updated;
-        this.allSongs[i] = updated;
-
-        this.db?.saveSong(updated).catch(() => {});
+        this.db?.saveSong(song).catch(() => {});
       }
     };
 
@@ -174,4 +177,24 @@ export default class SongManager {
     // 🔥 single UI update
     this._onUpdate?.([...this.allSongs]);
   }
+
+  async loadFromCache(onUpdate) {
+  const cached = await this.db.getAllSongs();
+  if (cached && cached.length) {
+    this.allSongs = cached.map(s => new Song(s));
+    onUpdate?.([...this.allSongs]);
+    return this.allSongs;
+  }
+  return [];
 }
+
+//ui listeners
+setOnSongChange(callback) {
+  this._onSongChange = callback;
+}
+
+
+
+
+}
+
