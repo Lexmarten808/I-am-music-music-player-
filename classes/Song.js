@@ -46,7 +46,7 @@ await this.sound.loadAsync(
   true
 );
 
-// 🔥 sync playback + end detection
+//  sync playback + end detection
 this.sound.setOnPlaybackStatusUpdate((status) => {
   if (!status.isLoaded) return;
 
@@ -65,25 +65,50 @@ this.sound.setOnPlaybackStatusUpdate((status) => {
     }
   }
 
- async play() {
-  if (this.sound) {
-    await this.stop();
-  }
+async play() {
+        try {
+            // 1. check if already loaded
+            if (this.sound) {
+                const status = await this.sound.getStatusAsync();
+                if (status.isLoaded) {
+                    await this.sound.playAsync();
+                    this.isPlaying = true;
+                    return;
+                }
+            }
 
-  const { sound } = await Audio.Sound.createAsync(
-    { uri: this.uri },
-    { shouldPlay: true },
-    status => {
-      if (status.didJustFinish && this._onEnded) {
-        this._onEnded();
-      }
+            // 2. If it doesn't exist or was unloaded, create it with background options
+            const { sound } = await Audio.Sound.createAsync(
+                { uri: this.uri },
+                { 
+                    shouldPlay: true,
+                    staysActiveInBackground: true, // VITAL
+                    interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX,
+                    shouldDuckAndroid: true,
+                    playThroughEarpieceAndroid: false
+                },
+                this._onPlaybackStatusUpdate.bind(this) // We use a centralized function
+            );
+
+            this.sound = sound;
+            this.isPlaying = true;
+        } catch (error) {
+            console.error("Error en play():", error);
+        }
     }
-  );
 
-  this.sound = sound;
-  this.isPlaying = true;
-}
+    // Centralized function to handle status
+    _onPlaybackStatusUpdate(status) {
+        if (!status.isLoaded) return;
 
+        this.isPlaying = status.isPlaying;
+
+        if (status.didJustFinish) {
+            this.isPlaying = false;
+            // IMPORTANTE: No llames a unloadAsync aquí si quieres que "Siguiente" sea rápido
+            if (this.onEnded) this.onEnded();
+        }
+    }
   async pause() {
     if (this.sound && this.isPlaying) {
       await this.sound.pauseAsync();

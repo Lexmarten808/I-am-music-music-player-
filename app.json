@@ -14,7 +14,11 @@
     "android": {
       "permissions": [
         "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS"
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_AUDIO",
+        "android.permission.WAKE_LOCK"
+        
       ],
       "package": "com.brandon_lasprilla.iammusic"
     },
@@ -26,7 +30,12 @@
     "plugins": [
       "expo-audio",
       "expo-video",
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+      "expo-av",
+      {
+      "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone",
+          "enableBackgroundAudio": true}]
     ],
     "extra": {
       "eas": {

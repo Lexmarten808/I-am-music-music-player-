@@ -29,25 +29,31 @@ export default function MainScreen() {
   
 
 
- useEffect(() => {
+useEffect(() => {
   const setupAudio = async () => {
-    await Audio.setAudioModeAsync({
-      staysActiveInBackground: true,
-      playsInSilentModeIOS: true,
-      shouldDuckAndroid: true,
-      interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX,
-    });
+    try {
+      await Audio.setAudioModeAsync({
+        staysActiveInBackground: true, 
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
+        interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX,
+        interruptionModeIOS: Audio.INTERRUPTION_MODE_IOS_DO_NOT_MIX,
+        playThroughEarpieceAndroid: false,
+      });
+    } catch (e) {
+      console.log("Error setupAudio:", e);
+    }
   };
-
   setupAudio();
-}, []); 
+}, []);
+
 useEffect(() => {
   const restore = async () => {
-    // 1️⃣ try DB first
+    // 1️ try DB first
     const cached = await songManager.loadFromCache(setSongs);
     if (cached.length) return;
 
-    // 2️⃣ fallback to last folder
+    // 2️ fallback to last folder
     const lastFolder = await AsyncStorage.getItem('last_music_folder');
     if (lastFolder) {
       const songs = await songManager.scanFolder(lastFolder, setSongs);
@@ -171,24 +177,40 @@ const seleccionarCarpeta = async () => {
   const viewBufferRef = useRef(null);
   const pendingVisibleRef = useRef([]);
 
-  const processVisibleItems = async () => {
-    const items = pendingVisibleRef.current.splice(0, pendingVisibleRef.current.length);
-    for (const { item } of items) {
-      if (!item) continue;
-      if (loadingRef.current.has(item.id)) continue;
-      if (!item.cover || item.artist === 'Leyendo...' || item.artist === 'Artista Desconocido') {
-        loadingRef.current.add(item.id);
-        try {
-          const updated = await songManager.loadCoverOnDemand(item);
-          setSongs(prev => prev.map(s => (s.id === updated.id ? updated : s)));
-        } catch (e) {
-          console.warn('loadCoverOnDemand error', e);
-        } finally {
-          loadingRef.current.delete(item.id);
+// Dentro de MainScreen.js, modifica processVisibleItems:
+
+const processVisibleItems = async () => {
+  const items = pendingVisibleRef.current.splice(0, pendingVisibleRef.current.length);
+  
+  for (const { item } of items) {
+    if (!item || loadingRef.current.has(item.id)) continue;
+
+    // Solo cargar si realmente dice "Loading..."
+    if (item.artist === 'Loading...') {
+      loadingRef.current.add(item.id);
+      
+      try {
+        const meta = await songManager.loadCoverOnDemand(item);
+        
+        if (meta) {
+          // IMPORTANTE: Actualizamos las propiedades del objeto EXISTENTE
+          // en lugar de crear un objeto Song nuevo.
+          item.title = meta.title;
+          item.artist = meta.artist;
+          item.album = meta.album;
+          item.cover = meta.cover;
+
+          // Forzamos un re-render simple de la lista
+          setSongs(prev => [...prev]);
         }
+      } catch (e) {
+        console.warn('loadCoverOnDemand error', e);
+      } finally {
+        loadingRef.current.delete(item.id);
       }
     }
-  };
+  }
+};
 
   const onViewableItemsChanged = useRef(({ viewableItems }) => {
     // accumulate and debounce

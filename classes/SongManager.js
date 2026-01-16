@@ -7,8 +7,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const LAST_FOLDER_KEY = 'last_music_folder';
 
 
-const START_CHUNK = 128 * 1024; // rápido
-const END_CHUNK   = 256 * 1024; // fallback seguro
+const START_CHUNK = 128 * 1024; // amount to read from start
+const END_CHUNK   = 256 * 1024; // amount to read from end
 const CONCURRENCY = 4;          // Android safe
 
 
@@ -131,15 +131,15 @@ export default class SongManager {
      SMART TAG READER
   ========================== */
   async getTags(uri, fileName) {
-    // 1️⃣ fast read (start)
+    // 1️ fast read (start)
     const startMeta = await this.readChunk(uri, fileName, 0, START_CHUNK);
     if (startMeta && !this.isMetaIncomplete(startMeta)) return startMeta;
 
-    // 2️⃣ fallback (end)
+    // 2️ fallback (end)
     const endMeta = await this.readFromEnd(uri, fileName);
     if (endMeta && !this.isMetaIncomplete(endMeta)) return endMeta;
 
-    // 3️⃣ merge best of both
+    // 3️ merge best of both
     return {
       title: startMeta?.title || endMeta?.title || fileName,
       artist: startMeta?.artist || endMeta?.artist || 'Unknown Artist',
@@ -174,7 +174,7 @@ export default class SongManager {
       Array.from({ length: CONCURRENCY }, worker)
     );
 
-    // 🔥 single UI update
+    //  single UI update
     this._onUpdate?.([...this.allSongs]);
   }
 
@@ -194,7 +194,35 @@ setOnSongChange(callback) {
 }
 
 
+async loadCoverOnDemand(song) {
+  try {
+    // 1. Intentar buscar en DB primero para ir a la velocidad del rayo
+    const cached = await this.db.getSongById(song.id);
+    if (cached && cached.artist !== 'Loading...') {
+      return cached; // Devolvemos el objeto plano de la DB
+    }
 
+    // 2. Si no está en DB, leer tags
+    const meta = await this.getTags(song.uri, song.title);
+    
+    const result = {
+      id: song.id,
+      title: meta.title,
+      artist: meta.artist,
+      album: meta.album,
+      uri: song.uri,
+      cover: meta.cover 
+    };
+
+    // 3. Guardar en DB sin bloquear
+    this.db?.saveSong(result).catch(() => {});
+
+    return result;
+  } catch (e) {
+    console.warn("Error en loadCoverOnDemand:", e);
+    return null;
+  }
+}
 
 }
 
