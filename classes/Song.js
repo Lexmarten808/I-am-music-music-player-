@@ -1,4 +1,3 @@
-import { Audio } from 'expo-av';
 // class used to store the song information
 export default class Song {
     //------------ constructor ------------//
