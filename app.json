@@ -28,8 +28,8 @@
     },
     "plugins": [
       "expo-audio",
-      "expo-sqlite",
-      "react-native-track-player" 
+      "expo-sqlite"
+      
     ],
     "extra": {
       "eas": {
