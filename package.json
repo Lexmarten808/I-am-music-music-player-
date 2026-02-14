@@ -32,7 +32,7 @@
     "jsmediatags": "^3.9.7",
     "react": "19.1.0",
     "react-native": "0.81.5",
-    "react-native-track-player": "4.1.1"
+    "react-native-track-player": "^4.1.2"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0"
