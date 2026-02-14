@@ -1,5 +1,6 @@
-
+import { Buffer } from 'buffer';
 import * as FileSystem from 'expo-file-system';
+import jsmediatags from 'jsmediatags/dist/jsmediatags.min.js';
 import Song from './Song';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 

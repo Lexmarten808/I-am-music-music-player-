@@ -4,32 +4,47 @@
     "slug": "i-am-music",
     "version": "1.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "dark", 
-    "assetBundlePatterns": ["**/*"],
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.brandonlasprilla.iammusic"
+      "supportsTablet": true
     },
     "android": {
-      "package": "com.brandonlasprilla.iammusic",
       "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_AUDIO",
-        "WAKE_LOCK",
-        "READ_EXTERNAL_STORAGE"
+        "android.permission.WAKE_LOCK"
+        
       ],
       "foregroundService": {
-        "notification": {
-          "title": "I am music",
-          "body": "Reproduciendo música en segundo plano",
-          "icon": "./assets/icon.png"
-        }
-      }
+    "notification": {
+      "title": "I am music",
+      "body": "Reproduciendo música en segundo plano",
+      "icon": "./assets/icon.png"
+    }
+  }
+},
+      
+      "package": "com.brandon_lasprilla.iammusic"
+    },
+    "web": {
+      "plugins": [
+        "expo-asset"
+      ]
     },
     "plugins": [
       "expo-audio",
+      "expo-video",
       "expo-sqlite",
-      "react-native-track-player" 
+      [
+      "expo-av",
+      {
+      "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone",
+          "enableBackgroundAudio": true}]
     ],
     "extra": {
       "eas": {
@@ -37,4 +52,4 @@
       }
     }
   }
-}
+
