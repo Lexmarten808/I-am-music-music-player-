@@ -20,15 +20,6 @@
         "android.permission.WAKE_LOCK"
         
       ],
-      "foregroundService": {
-    "notification": {
-      "title": "I am music",
-      "body": "Reproduciendo música en segundo plano",
-      "icon": "./assets/icon.png"
-    }
-  }
-},
-      
       "package": "com.brandon_lasprilla.iammusic"
     },
     "web": {
@@ -52,4 +43,4 @@
       }
     }
   }
-
+}

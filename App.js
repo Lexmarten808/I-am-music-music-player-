@@ -3,10 +3,6 @@ import DatabaseManager from './classes/DatabaseManager';
 import SongManager from './classes/SongManager';
 import React from 'react';
 import MainScreen from './frontend/MainScreen'; // Importamos tu UI
-import TrackPlayer from 'react-native-track-player';
-import { PlaybackService } from './trackPlayerServices';
-
-TrackPlayer.registerPlaybackService(() => PlaybackService);
 
 export default function App() {
   return <MainScreen />;
