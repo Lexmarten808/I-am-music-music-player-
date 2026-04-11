@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, FlatList,Image } from 'react-native';
 import SongItem from './SongItem';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Audio } from 'expo-av';
 import { MaterialIcons } from '@expo/vector-icons';
 
 // Importamos FileSystem para usar el selector de carpetas
@@ -28,24 +27,6 @@ export default function MainScreen() {
 
   
 
-
-useEffect(() => {
-  const setupAudio = async () => {
-    try {
-      await Audio.setAudioModeAsync({
-        staysActiveInBackground: true, 
-        playsInSilentModeIOS: true,
-        shouldDuckAndroid: true,
-        interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX,
-        interruptionModeIOS: Audio.INTERRUPTION_MODE_IOS_DO_NOT_MIX,
-        playThroughEarpieceAndroid: false,
-      });
-    } catch (e) {
-      console.log("Error setupAudio:", e);
-    }
-  };
-  setupAudio();
-}, []);
 
 useEffect(() => {
   const restore = async () => {
