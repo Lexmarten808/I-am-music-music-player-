@@ -3,9 +3,14 @@ import DatabaseManager from './classes/DatabaseManager';
 import SongManager from './classes/SongManager';
 import React from 'react';
 import MainScreen from './frontend/MainScreen'; // Importamos tu UI
+import { AudioProvider } from './AudioContext';
 
 export default function App() {
-  return <MainScreen />;
+  return (
+    <AudioProvider>
+      <MainScreen />
+    </AudioProvider>
+  );
 }
 // 1. initialize the database
 const miBD = new DatabaseManager();

@@ -9,7 +9,12 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "audio"
+        ]
+      }
     },
     "android": {
       "permissions": [
@@ -18,7 +23,6 @@
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_AUDIO",
         "android.permission.WAKE_LOCK"
-        
       ],
       "package": "com.brandon_lasprilla.iammusic"
     },
@@ -32,10 +36,13 @@
       "expo-video",
       "expo-sqlite",
       [
-      "expo-av",
-      {
-      "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone",
-          "enableBackgroundAudio": true}]
+        "expo-av",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone",
+          "enableBackgroundAudio": true
+        }
+      ],
+      "expo-font"
     ],
     "extra": {
       "eas": {
