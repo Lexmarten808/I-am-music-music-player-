@@ -18,8 +18,7 @@ export default class SongManager {
     this.db = dbManager;
     this.allSongs = [];
     this._onUpdate = null;
-
-
+    this._metadataCache = new Map(); // In-memory cache for fast lookups
     
     //callbacks
     this._onSongChange = null;
@@ -131,11 +130,11 @@ export default class SongManager {
      SMART TAG READER
   ========================== */
   async getTags(uri, fileName) {
-    // 1️ fast read (start)
+    // 1️ fast read (start) - this covers ~80% of cases
     const startMeta = await this.readChunk(uri, fileName, 0, START_CHUNK);
     if (startMeta && !this.isMetaIncomplete(startMeta)) return startMeta;
 
-    // 2️ fallback (end)
+    // 2️ fallback (end) - only if start didn't have complete data
     const endMeta = await this.readFromEnd(uri, fileName);
     if (endMeta && !this.isMetaIncomplete(endMeta)) return endMeta;
 
@@ -165,6 +164,9 @@ export default class SongManager {
         song.setArtist(meta.artist);
         song.setAlbum(meta.album);
         song.setCover(meta.cover);
+
+        // Cache in memory for fast lookups
+        this._metadataCache.set(song.id, meta);
 
         this.db?.saveSong(song).catch(() => {});
       }
@@ -196,13 +198,35 @@ setOnSongChange(callback) {
 
 async loadCoverOnDemand(song) {
   try {
-    // 1. Intentar buscar en DB primero para ir a la velocidad del rayo
-    const cached = await this.db.getSongById(song.id);
-    if (cached && cached.artist !== 'Loading...') {
-      return cached; // Devolvemos el objeto plano de la DB
+    // 1. Check in-memory cache first (fastest)
+    if (this._metadataCache.has(song.id)) {
+      const cached = this._metadataCache.get(song.id);
+      if (cached && cached.artist !== 'Loading...') {
+        return {
+          id: song.id,
+          title: cached.title,
+          artist: cached.artist,
+          album: cached.album,
+          uri: song.uri,
+          cover: cached.cover
+        };
+      }
     }
 
-    // 2. Si no está en DB, leer tags
+    // 2. Check DB for previously processed songs (fast if ready)
+    const dbCached = await this.db.getSongById(song.id);
+    if (dbCached && dbCached.artist && dbCached.artist !== 'Loading...') {
+      // Cache it in memory too
+      this._metadataCache.set(song.id, {
+        title: dbCached.title,
+        artist: dbCached.artist,
+        album: dbCached.album,
+        cover: dbCached.cover
+      });
+      return dbCached;
+    }
+
+    // 3. Read tags from file (only if not cached)
     const meta = await this.getTags(song.uri, song.title);
     
     const result = {
@@ -214,7 +238,10 @@ async loadCoverOnDemand(song) {
       cover: meta.cover 
     };
 
-    // 3. Guardar en DB sin bloquear
+    // 4. Cache in memory
+    this._metadataCache.set(song.id, meta);
+
+    // 5. Save to DB without blocking
     this.db?.saveSong(result).catch(() => {});
 
     return result;

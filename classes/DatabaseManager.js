@@ -194,4 +194,64 @@ export default class DatabaseManager {
       return Array.from(this._memorySongs);
     }
   }
+
+  async getSongById(id) {
+    await this._ready;
+    try {
+      if (this._useMemoryFallback || !this.db) {
+        return this._memorySongs.find(s => s.id === id) || null;
+      }
+      // Prefer higher-level async APIs when available
+      if (typeof this.db.getFirstAsync === 'function') {
+        try {
+          return await this.db.getFirstAsync('SELECT * FROM songs WHERE id = ?', [id]);
+        } catch (gErr) { console.warn('getFirstAsync failed, falling back', gErr); }
+      }
+
+      if (typeof this.db.getAllAsync === 'function') {
+        try {
+          const results = await this.db.getAllAsync('SELECT * FROM songs WHERE id = ?', [id]);
+          return results && results.length > 0 ? results[0] : null;
+        } catch (gErr) { console.warn('getAllAsync failed, falling back', gErr); }
+      }
+
+      if (typeof this.db.execAsync === 'function') {
+        try {
+          const res = await this.db.execAsync('SELECT * FROM songs WHERE id = ?', [id]);
+          if (!res) return null;
+          if (res.rows && typeof res.rows.length === 'number' && res.rows.length > 0) {
+            return res.rows.item(0);
+          }
+          if (Array.isArray(res) && res.length > 0) {
+            const first = res[0];
+            if (first && first.rows && typeof first.rows.length === 'number' && first.rows.length > 0) {
+              return first.rows.item(0);
+            }
+            if (Array.isArray(first) && first.length > 0) return first[0];
+          }
+        } catch (execErr) { console.warn('execAsync select failed, falling back', execErr); }
+      }
+
+      if (typeof this.db.runAsync === 'function') {
+        try {
+          const maybe = await this.db.runAsync('SELECT * FROM songs WHERE id = ?', [id]);
+          if (Array.isArray(maybe) && maybe.length > 0) return maybe[0];
+          if (maybe && maybe.rows && typeof maybe.rows.length === 'number' && maybe.rows.length > 0) {
+            return maybe.rows.item(0);
+          }
+        } catch (runErr) { console.warn('runAsync select failed, falling back', runErr); }
+      }
+
+      if (this.db.transaction) {
+        const res = await new Promise((res, rej) => this.db.transaction(tx => tx.executeSql('SELECT * FROM songs WHERE id = ?', [id], (_, r) => res(r), (_, e) => rej(e))));
+        if (res.rows.length > 0) return res.rows.item(0);
+        return null;
+      }
+
+      return null;
+    } catch (error) {
+      console.warn('Error getting song by id:', error);
+      return null;
+    }
+  }
 }
