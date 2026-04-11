@@ -1,1 +1,39 @@
 node_modules
+.expo/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Expo local state
+.expo-shared/
+
+# Android local/build files
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+
+# iOS local/build files
+ios/build/
+ios/Pods/
+
+# Credentials and signing files
+*.keystore
+*.jks
+*.p12
+*.p8
+*.pem
+*.key
+
+# Firebase credentials
+google-services.json
+GoogleService-Info.plist
+
+# Logs and temporary files
+*.log
+coverage/
+tmp/
+.DS_Store
+Thumbs.db
