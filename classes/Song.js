@@ -77,8 +77,9 @@ async function toTrack(song) {
   };
 }
 
-/*updates the metadata of a track 
- (it helps to uptdate the notification info includind the cover)*/
+/* Updates the metadata for a track.
+ * This helps update the notification information, including the cover.
+ */
 async function updateTrackMetadata(song) {
   try {
     if (!song?.id) return;
