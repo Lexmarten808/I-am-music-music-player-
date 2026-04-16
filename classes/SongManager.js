@@ -315,7 +315,8 @@ async loadCoverOnDemand(song) {
     // 4. Cache in memory
     this._metadataCache.set(song.id, merged);
 
-    Song.updateTrackMetadata(song).catch(() => {}); // Update notification metadata if needed
+    // Do not update player/notification metadata from this scroll-driven code path.
+    // Track metadata should be refreshed only when the song becomes the active track.
 
     // 5. Save to DB without blocking
     this.db?.saveSong(result).catch(() => {});
