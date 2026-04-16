@@ -30,9 +30,9 @@ function hashString(value) {
   const input = String(value || '');
   for (let i = 0; i < input.length; i++) {
     hash ^= input.charCodeAt(i);
-    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
   }
-  return (hash >>> 0).toString(16);
+  return hash.toString(16);
 }
 
 async function resolveArtworkUri(song) {
