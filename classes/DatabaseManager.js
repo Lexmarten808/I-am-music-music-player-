@@ -37,30 +37,28 @@ export default class DatabaseManager {
       cover TEXT
     );`;
 
-    // Try multiple ways to create the table. If the native driver blows up
-    // (some versions throw a NullPointerException deep in prepareAsync),
-    // fall back to an in-memory store so the app remains usable.
     try {
-      try {
-        // Prefer explicit transaction 
-        await new Promise((res, rej) => this.db.transaction(tx => tx.executeSql(create, [], () => res(true), (_, err) => rej(err))));
+      if (typeof this.db.runAsync === 'function') {
+        await this.db.runAsync(create, []);
+        console.log('Database initialized with runAsync');
+        return true;
+      }
+
+      if (typeof this.db.execAsync === 'function') {
+        await this.db.execAsync(create);
+        console.log('Database initialized with execAsync');
+        return true;
+      }
+
+      if (this.db.transaction) {
+        await new Promise((res, rej) =>
+          this.db.transaction(tx => tx.executeSql(create, [], () => res(true), (_, err) => rej(err)))
+        );
         console.log('Database initialized with transaction/executeSql');
         return true;
-      } catch (txErr) {
-        console.warn('transaction executeSql failed, trying execAsync/runAsync:', txErr);
-        if (this.db.execAsync) {
-          await this.db.execAsync(create);
-          console.log('Database initialized with execAsync');
-          return true;
-        }
-        if (this.db.runAsync) {
-          // Some runAsync signatures expect (sql, argsArray)
-          await this.db.runAsync(create, []);
-          console.log('Database initialized with runAsync');
-          return true;
-        }
-        throw txErr;
       }
+
+      throw new Error('No usable DB init API');
     } catch (e) {
       console.error('DB init failed, enabling memory fallback:', e);
       this._useMemoryFallback = true;
@@ -76,9 +74,20 @@ export default class DatabaseManager {
     if (this._useMemoryFallback || !this.db) {
       try {
         const existing = this._memorySongs.find(s => s.id === song.id || s.uri === song.uri);
-        const entry = { id: String(song.id || song.uri || Date.now()), title: String(song.title || 'Unknown Title'), artist: String(song.artist || 'Unknown Artist'), album: String(song.album || 'Unknown Album'), uri: String(song.uri || ''), duration: Number(song.duration || 0), cover: song.cover || null };
-        if (existing) Object.assign(existing, entry); else this._memorySongs.push(entry);
-      } catch (memErr) { console.warn('Memory saveSong failed', memErr); }
+        const entry = {
+          id: String(song.id || song.uri || Date.now()),
+          title: String(song.title || 'Unknown Title'),
+          artist: String(song.artist || 'Unknown Artist'),
+          album: String(song.album || 'Unknown Album'),
+          uri: String(song.uri || ''),
+          duration: Number(song.duration || 0),
+          cover: song.cover || null,
+        };
+        if (existing) Object.assign(existing, entry);
+        else this._memorySongs.push(entry);
+      } catch (memErr) {
+        console.warn('Memory saveSong failed', memErr);
+      }
       return;
     }
 
@@ -89,46 +98,32 @@ export default class DatabaseManager {
       String(song.album || 'Unknown Album'),
       String(song.uri || ''),
       Number(song.duration || 0),
-      song.cover || null
-      
+      song.cover || null,
     ];
 
     const sql = 'INSERT OR REPLACE INTO songs (id, title, artist, album, uri, duration, cover) VALUES (?, ?, ?, ?, ?, ?, ?);';
+
     try {
-      // Prefer runAsync with parameters when available
       if (typeof this.db.runAsync === 'function') {
-        try {
-          await this.db.runAsync(sql, params);
-          console.log('DB insert via runAsync:', params[0]);
-          return;
-        } catch (e) {
-          console.warn('runAsync insert failed, trying execAsync/transaction', e);
-        }
-      }
-      if (typeof this.db.execAsync === 'function') {
-        try {
-          // pass params when supported
-          const res = await this.db.execAsync(sql, params);
-          console.log('DB insert via execAsync:', params[0]);
-          return;
-        } catch (e) {
-          console.warn('execAsync insert failed, trying transaction', e);
-        }
-      }
-      if (this.db.transaction) {
-        await new Promise((res, rej) => this.db.transaction(tx => tx.executeSql(sql, params, () => res(true), (_, err) => rej(err))));
-        console.log('DB insert via transaction:', params[0]);
+        await this.db.runAsync(sql, params);
         return;
       }
+
+      if (typeof this.db.execAsync === 'function') {
+        await this.db.execAsync(sql, params);
+        return;
+      }
+
+      if (this.db.transaction) {
+        await new Promise((res, rej) =>
+          this.db.transaction(tx => tx.executeSql(sql, params, () => res(true), (_, err) => rej(err)))
+        );
+        return;
+      }
+
       throw new Error('No usable DB write API');
     } catch (error) {
-      console.error('DB Save Error, falling back to memory:', error && (error.message || error));
-      this._useMemoryFallback = true;
-      try {
-        const existing = this._memorySongs.find(s => s.id === song.id || s.uri === song.uri);
-        const entry = { id: String(song.id || song.uri || Date.now()), title: String(song.title || 'Unknown Title'), artist: String(song.artist || 'Unknown Artist'), album: String(song.album || 'Unknown Album'), uri: String(song.uri || ''), duration: Number(song.duration || 0), cover: song.cover || null };
-        if (existing) Object.assign(existing, entry); else this._memorySongs.push(entry);
-      } catch (memErr) { console.warn('Memory save fallback failed', memErr); }
+      console.error('DB Save Error:', error && (error.message || error));
     }
   }
 
@@ -138,50 +133,46 @@ export default class DatabaseManager {
       if (this._useMemoryFallback || !this.db) {
         return Array.from(this._memorySongs);
       }
-      // Prefer higher-level async APIs when available
+
       if (typeof this.db.getAllAsync === 'function') {
-        try {
-          return await this.db.getAllAsync('SELECT * FROM songs');
-        } catch (gErr) { console.warn('getAllAsync failed, falling back', gErr); }
+        return await this.db.getAllAsync('SELECT * FROM songs');
       }
 
       if (typeof this.db.execAsync === 'function') {
-        try {
-          const res = await this.db.execAsync('SELECT * FROM songs');
-          // Try several possible result shapes
-          if (!res) return [];
-          if (res.rows && typeof res.rows.length === 'number') {
+        const res = await this.db.execAsync('SELECT * FROM songs');
+        if (!res) return [];
+
+        if (res.rows && typeof res.rows.length === 'number') {
+          const rows = [];
+          for (let i = 0; i < res.rows.length; i++) rows.push(res.rows.item(i));
+          return rows;
+        }
+
+        if (Array.isArray(res) && res.length > 0) {
+          const first = res[0];
+          if (first && first.rows && typeof first.rows.length === 'number') {
             const rows = [];
-            for (let i = 0; i < res.rows.length; i++) rows.push(res.rows.item(i));
+            for (let i = 0; i < first.rows.length; i++) rows.push(first.rows.item(i));
             return rows;
           }
-          if (Array.isArray(res) && res.length > 0) {
-            const first = res[0];
-            if (first && first.rows && typeof first.rows.length === 'number') {
-              const rows = [];
-              for (let i = 0; i < first.rows.length; i++) rows.push(first.rows.item(i));
-              return rows;
-            }
-            if (Array.isArray(first)) return first;
-          }
-        } catch (execErr) { console.warn('execAsync select failed, falling back', execErr); }
+          if (Array.isArray(first)) return first;
+        }
       }
 
       if (typeof this.db.runAsync === 'function') {
-        try {
-          const maybe = await this.db.runAsync('SELECT * FROM songs', []);
-          if (Array.isArray(maybe)) return maybe;
-          // otherwise attempt to extract rows property
-          if (maybe && maybe.rows && typeof maybe.rows.length === 'number') {
-            const rows = [];
-            for (let i = 0; i < maybe.rows.length; i++) rows.push(maybe.rows.item(i));
-            return rows;
-          }
-        } catch (runErr) { console.warn('runAsync select failed, falling back', runErr); }
+        const maybe = await this.db.runAsync('SELECT * FROM songs', []);
+        if (Array.isArray(maybe)) return maybe;
+        if (maybe && maybe.rows && typeof maybe.rows.length === 'number') {
+          const rows = [];
+          for (let i = 0; i < maybe.rows.length; i++) rows.push(maybe.rows.item(i));
+          return rows;
+        }
       }
 
       if (this.db.transaction) {
-        const res = await new Promise((res, rej) => this.db.transaction(tx => tx.executeSql('SELECT * FROM songs', [], (_, r) => res(r), (_, e) => rej(e))));
+        const res = await new Promise((res, rej) =>
+          this.db.transaction(tx => tx.executeSql('SELECT * FROM songs', [], (_, r) => res(r), (_, e) => rej(e)))
+        );
         const rows = [];
         for (let i = 0; i < res.rows.length; i++) rows.push(res.rows.item(i));
         return rows;
@@ -190,7 +181,6 @@ export default class DatabaseManager {
       throw new Error('No usable DB read API');
     } catch (error) {
       console.error('Error getting songs:', error);
-      this._useMemoryFallback = true;
       return Array.from(this._memorySongs);
     }
   }
@@ -201,51 +191,44 @@ export default class DatabaseManager {
       if (this._useMemoryFallback || !this.db) {
         return this._memorySongs.find(s => s.id === id) || null;
       }
-      // Prefer higher-level async APIs when available
+
       if (typeof this.db.getFirstAsync === 'function') {
-        try {
-          return await this.db.getFirstAsync('SELECT * FROM songs WHERE id = ?', [id]);
-        } catch (gErr) { console.warn('getFirstAsync failed, falling back', gErr); }
+        return await this.db.getFirstAsync('SELECT * FROM songs WHERE id = ?', [id]);
       }
 
       if (typeof this.db.getAllAsync === 'function') {
-        try {
-          const results = await this.db.getAllAsync('SELECT * FROM songs WHERE id = ?', [id]);
-          return results && results.length > 0 ? results[0] : null;
-        } catch (gErr) { console.warn('getAllAsync failed, falling back', gErr); }
+        const results = await this.db.getAllAsync('SELECT * FROM songs WHERE id = ?', [id]);
+        return results && results.length > 0 ? results[0] : null;
       }
 
       if (typeof this.db.execAsync === 'function') {
-        try {
-          const res = await this.db.execAsync('SELECT * FROM songs WHERE id = ?', [id]);
-          if (!res) return null;
-          if (res.rows && typeof res.rows.length === 'number' && res.rows.length > 0) {
-            return res.rows.item(0);
+        const res = await this.db.execAsync('SELECT * FROM songs WHERE id = ?', [id]);
+        if (!res) return null;
+        if (res.rows && typeof res.rows.length === 'number' && res.rows.length > 0) {
+          return res.rows.item(0);
+        }
+        if (Array.isArray(res) && res.length > 0) {
+          const first = res[0];
+          if (first && first.rows && typeof first.rows.length === 'number' && first.rows.length > 0) {
+            return first.rows.item(0);
           }
-          if (Array.isArray(res) && res.length > 0) {
-            const first = res[0];
-            if (first && first.rows && typeof first.rows.length === 'number' && first.rows.length > 0) {
-              return first.rows.item(0);
-            }
-            if (Array.isArray(first) && first.length > 0) return first[0];
-          }
-        } catch (execErr) { console.warn('execAsync select failed, falling back', execErr); }
+          if (Array.isArray(first) && first.length > 0) return first[0];
+        }
       }
 
       if (typeof this.db.runAsync === 'function') {
-        try {
-          const maybe = await this.db.runAsync('SELECT * FROM songs WHERE id = ?', [id]);
-          if (Array.isArray(maybe) && maybe.length > 0) return maybe[0];
-          if (maybe && maybe.rows && typeof maybe.rows.length === 'number' && maybe.rows.length > 0) {
-            return maybe.rows.item(0);
-          }
-        } catch (runErr) { console.warn('runAsync select failed, falling back', runErr); }
+        const maybe = await this.db.runAsync('SELECT * FROM songs WHERE id = ?', [id]);
+        if (Array.isArray(maybe) && maybe.length > 0) return maybe[0];
+        if (maybe && maybe.rows && typeof maybe.rows.length === 'number' && maybe.rows.length > 0) {
+          return maybe.rows.item(0);
+        }
       }
 
       if (this.db.transaction) {
-        const res = await new Promise((res, rej) => this.db.transaction(tx => tx.executeSql('SELECT * FROM songs WHERE id = ?', [id], (_, r) => res(r), (_, e) => rej(e))));
+        const res = await new Promise((res, rej) =>
+          this.db.transaction(tx => tx.executeSql('SELECT * FROM songs WHERE id = ?', [id], (_, r) => res(r), (_, e) => rej(e)))
+        );
         if (res.rows.length > 0) return res.rows.item(0);
-        return null;
       }
 
       return null;

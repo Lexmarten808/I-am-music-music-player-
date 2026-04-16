@@ -1,23 +1,61 @@
 import TrackPlayer, { Event } from 'react-native-track-player';
 
+async function getCurrentIndex() {
+  if (typeof TrackPlayer.getActiveTrackIndex === 'function') {
+    return await TrackPlayer.getActiveTrackIndex();
+  }
+
+  if (typeof TrackPlayer.getCurrentTrack === 'function') {
+    return await TrackPlayer.getCurrentTrack();
+  }
+
+  return null;
+}
+
 export default async function playbackService() {
   TrackPlayer.addEventListener(Event.RemotePlay, async () => {
-    await TrackPlayer.play();
+    try {
+      await TrackPlayer.play();
+    } catch {}
   });
 
   TrackPlayer.addEventListener(Event.RemotePause, async () => {
-    await TrackPlayer.pause();
+    try {
+      await TrackPlayer.pause();
+    } catch {}
   });
 
   TrackPlayer.addEventListener(Event.RemoteNext, async () => {
-    await TrackPlayer.skipToNext();
+    try {
+      const queue = await TrackPlayer.getQueue();
+      if (!queue?.length) return;
+
+      const currentIndex = await getCurrentIndex();
+      if (currentIndex == null) return;
+
+      const nextIndex = currentIndex + 1 < queue.length ? currentIndex + 1 : 0;
+      await TrackPlayer.skip(nextIndex);
+      await TrackPlayer.play();
+    } catch {}
   });
 
   TrackPlayer.addEventListener(Event.RemotePrevious, async () => {
-    await TrackPlayer.skipToPrevious();
+    try {
+      const queue = await TrackPlayer.getQueue();
+      if (!queue?.length) return;
+
+      const currentIndex = await getCurrentIndex();
+      if (currentIndex == null) return;
+
+      const prevIndex = currentIndex - 1 >= 0 ? currentIndex - 1 : queue.length - 1;
+      await TrackPlayer.skip(prevIndex);
+      await TrackPlayer.play();
+    } catch {}
   });
 
   TrackPlayer.addEventListener(Event.RemoteStop, async () => {
-    await TrackPlayer.stop();
+    try {
+      await TrackPlayer.stop();
+    } catch {}
   });
 }
