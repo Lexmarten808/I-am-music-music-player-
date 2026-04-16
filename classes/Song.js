@@ -1,5 +1,6 @@
 import TrackPlayer, { Capability, Event, State } from 'react-native-track-player';
-import * as FileSystem from 'expo-file-system';
+import { Platform } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 
 let playerReady = false;
 let playerInitPromise = null;
@@ -24,6 +25,16 @@ function getSongsInOrder() {
   return Array.from(songRegistry.values()).filter(song => !!song?.uri);
 }
 
+function hashString(value) {
+  let hash = 0x811c9dc5;
+  const input = String(value || '');
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return (hash >>> 0).toString(16);
+}
+
 async function resolveArtworkUri(song) {
   try {
     if (!song?.cover) return undefined;
@@ -34,12 +45,18 @@ async function resolveArtworkUri(song) {
     const base64 = song.cover.split(',')[1];
     if (!base64) return undefined;
 
-    const fileUri = `${FileSystem.cacheDirectory}artwork_${encodeURIComponent(String(song.id))}.${ext}`;
+    const key = hashString(song.id || song.uri || song.title || 'artwork');
+    const fileUri = `${FileSystem.cacheDirectory}artwork_${key}.${ext}`;
     const info = await FileSystem.getInfoAsync(fileUri);
     if (!info.exists) {
       await FileSystem.writeAsStringAsync(fileUri, base64, {
         encoding: FileSystem.EncodingType.Base64,
       });
+    }
+    if (Platform.OS === 'android' && typeof FileSystem.getContentUriAsync === 'function') {
+      try {
+        return await FileSystem.getContentUriAsync(fileUri);
+      } catch {}
     }
     return fileUri;
   } catch {
@@ -58,6 +75,23 @@ async function toTrack(song) {
     artwork,
     duration: song.duration || undefined,
   };
+}
+
+/*updates the metadata of a track 
+ (it helps to uptdate the notification info includind the cover)*/
+async function updateTrackMetadata(song) {
+  try {
+    if (!song?.id) return;
+    if (typeof TrackPlayer.updateMetadataForTrack !== 'function') return;
+
+    const artwork = await resolveArtworkUri(song);
+    await TrackPlayer.updateMetadataForTrack(String(song.id), {
+      title: song.title,
+      artist: song.artist,
+      album: song.album,
+      artwork,
+    });
+  } catch {}
 }
 
 async function ensurePlayer() {
@@ -153,6 +187,10 @@ export default class Song {
   static onActiveSongChange(listener) {
     activeSongListeners.add(listener);
     return () => activeSongListeners.delete(listener);
+  }
+
+  static async updateTrackMetadata(song) {
+    await updateTrackMetadata(song);
   }
 
   //------------ constructor ------------//

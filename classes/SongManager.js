@@ -208,6 +208,8 @@ export default class SongManager {
         song.setAlbum(merged.album);
         song.setCover(merged.cover);
 
+        Song.updateTrackMetadata(song).catch(() => {}); // Update notification metadata if needed
+
         // Cache in memory for fast lookups
         this._metadataCache.set(song.id, merged);
 
@@ -296,6 +298,11 @@ async loadCoverOnDemand(song) {
       cover: meta?.cover || song.cover || null
     };
 
+    song.setTitle(merged.title);
+    song.setArtist(merged.artist);
+    song.setAlbum(merged.album);
+    song.setCover(merged.cover);
+
     const result = {
       id: song.id,
       title: merged.title,
@@ -307,6 +314,8 @@ async loadCoverOnDemand(song) {
 
     // 4. Cache in memory
     this._metadataCache.set(song.id, merged);
+
+    Song.updateTrackMetadata(song).catch(() => {}); // Update notification metadata if needed
 
     // 5. Save to DB without blocking
     this.db?.saveSong(result).catch(() => {});
