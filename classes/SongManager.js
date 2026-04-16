@@ -1,5 +1,6 @@
 import { Buffer } from 'buffer';
 import * as FileSystem from 'expo-file-system';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import jsmediatags from 'jsmediatags/dist/jsmediatags.min.js';
 import Song from './Song';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -10,6 +11,8 @@ const LAST_FOLDER_KEY = 'last_music_folder';
 const START_CHUNK = 128 * 1024; // amount to read from start
 const END_CHUNK   = 256 * 1024; // amount to read from end
 const CONCURRENCY = 4;          // Android safe
+const SAF = FileSystem.StorageAccessFramework || LegacyFileSystem.StorageAccessFramework;
+const FS = SAF === LegacyFileSystem.StorageAccessFramework ? LegacyFileSystem : FileSystem;
 
 
 
@@ -19,6 +22,9 @@ export default class SongManager {
     this.allSongs = [];
     this._onUpdate = null;
     this._metadataCache = new Map(); // In-memory cache for fast lookups
+    this._isScanning = false;
+    this._scanToken = 0;
+    this._lastUiUpdateAt = 0;
     
     //callbacks
     this._onSongChange = null;
@@ -29,10 +35,16 @@ export default class SongManager {
   ========================== */
   async scanFolder(folderUri, onUpdate) {
     try {
+      if (!SAF?.readDirectoryAsync) {
+        throw new Error('StorageAccessFramework is not available in this runtime');
+      }
+      this._metadataCache.clear();
+      this._isScanning = true;
+      const scanToken = ++this._scanToken;
       // save the last folder
       await AsyncStorage.setItem(LAST_FOLDER_KEY, folderUri);
       //reads the directory
-      const files = await FileSystem.StorageAccessFramework.readDirectoryAsync(folderUri);
+      const files = await SAF.readDirectoryAsync(folderUri);
       //filter audio files (only reads mp3 and wav for now)
       const audioFiles = files.filter(
         f => f.toLowerCase().endsWith('.mp3') || f.toLowerCase().endsWith('.wav')
@@ -57,9 +69,10 @@ export default class SongManager {
       this.currentIndex = 0;
       // store the onUpdate callback
       this._onUpdate = onUpdate;
+      this._onUpdate?.([...this.allSongs]);
 
       // background processing
-      this.processMetadatosEnLotes(songs);
+      this.processMetadatosEnLotes(songs, scanToken);
 
       return songs;
     } catch (e) {
@@ -80,13 +93,31 @@ export default class SongManager {
     );
   }
 
+  _notifyUpdate(force = false) {
+    if (!this._onUpdate) return;
+    const now = Date.now();
+    if (!force && now - this._lastUiUpdateAt < 250) return;
+    this._lastUiUpdateAt = now;
+    this._onUpdate([...this.allSongs]);
+  }
+
   async readChunk(uri, fileName, position, size) {
     try {
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-        length: size,
-        position
-      });
+      // Try a partial read (some runtimes expose position/length),
+      // but fall back to a full-file read if not supported.
+      let base64;
+      try {
+        base64 = await FS.readAsStringAsync(uri, {
+          encoding: FS.EncodingType.Base64,
+          length: size,
+          position
+        });
+      } catch (err) {
+        // Partial read not supported — read whole file as base64
+        base64 = await FS.readAsStringAsync(uri, {
+          encoding: FS.EncodingType.Base64
+        });
+      }
 
       const bytes = Array.from(Buffer.from(base64, 'base64'));
 
@@ -116,7 +147,7 @@ export default class SongManager {
 
   async readFromEnd(uri, fileName) {
     try {
-      const info = await FileSystem.getInfoAsync(uri);
+      const info = await FS.getInfoAsync(uri);
       if (!info.size) return null;
 
       const pos = Math.max(0, info.size - END_CHUNK);
@@ -150,34 +181,61 @@ export default class SongManager {
   /* =========================
      CONCURRENT PROCESSING
   ========================== */
-  async processMetadatosEnLotes(songs) {
+  async processMetadatosEnLotes(songs, scanToken = this._scanToken) {
     let index = 0;
+    const token = scanToken;
 
     const worker = async () => {
       while (index < songs.length) {
         const i = index++;
         const song = songs[i];
 
+        if (token !== this._scanToken) return;
+
         const meta = await this.getTags(song.uri, song.title);
 
-        song.setTitle(meta.title);
-        song.setArtist(meta.artist);
-        song.setAlbum(meta.album);
-        song.setCover(meta.cover);
+        if (token !== this._scanToken) return;
+
+        const merged = {
+          title: meta?.title || song.title,
+          artist: meta?.artist || song.artist || 'Unknown Artist',
+          album: meta?.album || song.album || 'Unknown Album',
+          cover: meta?.cover || song.cover || null
+        };
+
+        song.setTitle(merged.title);
+        song.setArtist(merged.artist);
+        song.setAlbum(merged.album);
+        song.setCover(merged.cover);
 
         // Cache in memory for fast lookups
-        this._metadataCache.set(song.id, meta);
+        this._metadataCache.set(song.id, merged);
 
-        this.db?.saveSong(song).catch(() => {});
+        const payload = {
+          id: song.id,
+          title: merged.title,
+          artist: merged.artist,
+          album: merged.album,
+          uri: song.uri,
+          duration: song.duration,
+          cover: merged.cover
+        };
+
+        this.db?.saveSong(payload).catch(() => {});
+        this._notifyUpdate();
       }
     };
 
-    await Promise.all(
-      Array.from({ length: CONCURRENCY }, worker)
-    );
-
-    //  single UI update
-    this._onUpdate?.([...this.allSongs]);
+    try {
+      await Promise.all(
+        Array.from({ length: CONCURRENCY }, worker)
+      );
+    } finally {
+      if (token === this._scanToken) {
+        this._isScanning = false;
+        this._notifyUpdate(true);
+      }
+    }
   }
 
   async loadFromCache(onUpdate) {
@@ -214,32 +272,41 @@ async loadCoverOnDemand(song) {
     }
 
     // 2. Check DB for previously processed songs (fast if ready)
-    const dbCached = await this.db.getSongById(song.id);
-    if (dbCached && dbCached.artist && dbCached.artist !== 'Loading...') {
-      // Cache it in memory too
-      this._metadataCache.set(song.id, {
-        title: dbCached.title,
-        artist: dbCached.artist,
-        album: dbCached.album,
-        cover: dbCached.cover
-      });
-      return dbCached;
+    if (!this._isScanning) {
+      const dbCached = await this.db.getSongById(song.id);
+      if (dbCached && dbCached.artist && dbCached.artist !== 'Loading...') {
+        // Cache it in memory too
+        this._metadataCache.set(song.id, {
+          title: dbCached.title,
+          artist: dbCached.artist,
+          album: dbCached.album,
+          cover: dbCached.cover
+        });
+        return dbCached;
+      }
     }
 
     // 3. Read tags from file (only if not cached)
     const meta = await this.getTags(song.uri, song.title);
-    
+
+    const merged = {
+      title: meta?.title || song.title,
+      artist: meta?.artist || song.artist || 'Unknown Artist',
+      album: meta?.album || song.album || 'Unknown Album',
+      cover: meta?.cover || song.cover || null
+    };
+
     const result = {
       id: song.id,
-      title: meta.title,
-      artist: meta.artist,
-      album: meta.album,
+      title: merged.title,
+      artist: merged.artist,
+      album: merged.album,
       uri: song.uri,
-      cover: meta.cover 
+      cover: merged.cover 
     };
 
     // 4. Cache in memory
-    this._metadataCache.set(song.id, meta);
+    this._metadataCache.set(song.id, merged);
 
     // 5. Save to DB without blocking
     this.db?.saveSong(result).catch(() => {});

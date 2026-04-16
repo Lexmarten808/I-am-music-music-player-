@@ -8,12 +8,15 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy'; 
 import SongManager from '../classes/SongManager';
 import DatabaseManager from '../classes/DatabaseManager';
+import Song from '../classes/Song';
 const db = new DatabaseManager();
 const songManager = new SongManager(db);
 
 
 export default function MainScreen() {
   const shuffleRef = useRef(false);
+  const songsRef = useRef([]);
+  const handleNextRef = useRef(null);
 
   const [songs, setSongs] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -24,9 +27,72 @@ export default function MainScreen() {
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [isShuffle, setIsShuffle] = useState(false);
   const [history, setHistory] = useState([]);
+  const [currentPosition, setCurrentPosition] = useState(0);
+  const [currentDuration, setCurrentDuration] = useState(0);
+
+  const bindSongCallbacks = (song) => {
+    if (!song) return;
+    song.setOnEnded(async () => {
+      if (handleNextRef.current) {
+        await handleNextRef.current();
+      }
+    });
+    song.setOnProgress((position, duration) => {
+      setCurrentPosition(position || 0);
+      if (duration) {
+        setCurrentDuration(duration);
+      }
+    });
+  };
+
+  const formatTime = (seconds) => {
+    const safe = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+    const mins = Math.floor(safe / 60);
+    const secs = safe % 60;
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
 
   
 
+
+useEffect(() => {
+  songsRef.current = songs;
+}, [songs]);
+
+useEffect(() => {
+  const unsubscribe = Song.onActiveSongChange((songId, playing, position, duration) => {
+    const list = songsRef.current;
+    if (!list?.length) return;
+
+    if (!songId) {
+      setIsPlaying(false);
+      setCurrentPosition(0);
+      return;
+    }
+
+    const nextIndex = list.findIndex(s => String(s.id) === String(songId));
+    if (nextIndex < 0) return;
+
+    const nextSong = list[nextIndex];
+    bindSongCallbacks(nextSong);
+    setCurrentSong(nextSong);
+    setCurrentIndex(nextIndex);
+    setCurrentDuration(nextSong.duration || duration || 0);
+    if (typeof playing === 'boolean') {
+      setIsPlaying(playing);
+    } else {
+      setIsPlaying(nextSong.isPlaying);
+    }
+    if (typeof position === 'number') {
+      setCurrentPosition(position);
+    }
+    if (typeof duration === 'number' && duration > 0) {
+      setCurrentDuration(duration);
+    }
+  });
+
+  return unsubscribe;
+}, []);
 
 useEffect(() => {
   const restore = async () => {
@@ -61,11 +127,13 @@ const handleSongPress = async (song) => {
 
   // play new song
   await song.play();
-  song.setOnEnded(handleNext);
+  bindSongCallbacks(song);
 
   setCurrentSong(song);
   setCurrentIndex(index);
   setIsPlaying(true);
+  setCurrentPosition(0);
+  setCurrentDuration(song.duration || 0);
 };
 
 // next button logig
@@ -89,11 +157,13 @@ const handleNext = async () => {
   if (currentSong) await currentSong.stop();
 
   await nextSong.play();
-  nextSong.setOnEnded(handleNext);
+  bindSongCallbacks(nextSong);
 
   setCurrentSong(nextSong);
   setCurrentIndex(nextIndex);
   setIsPlaying(true);
+  setCurrentPosition(0);
+  setCurrentDuration(nextSong.duration || 0);
 };
 
 //prev button logic
@@ -116,12 +186,16 @@ const handlePrev = async () => {
   if (currentSong) await currentSong.stop();
 
   await prevSong.play();
-  prevSong.setOnEnded(handleNext);
+  bindSongCallbacks(prevSong);
 
   setCurrentSong(prevSong);
   setCurrentIndex(prevIndex);
   setIsPlaying(true);
+  setCurrentPosition(0);
+  setCurrentDuration(prevSong.duration || 0);
 };
+
+handleNextRef.current = handleNext;
 
 
 const seleccionarCarpeta = async () => {
@@ -250,6 +324,9 @@ const processVisibleItems = async () => {
       <Text style={styles.barArtist} numberOfLines={1}>
         {currentSong.artist}
       </Text>
+      <Text style={styles.barTime} numberOfLines={1}>
+        {formatTime(currentPosition)} / {formatTime(currentDuration || currentSong.duration || 0)}
+      </Text>
     </View>
 
     {/* Controls */}
@@ -367,6 +444,12 @@ barTitle: {
 barArtist: {
   color: '#aaa',
   fontSize: 12
+},
+
+barTime: {
+  color: '#8f8f8f',
+  fontSize: 11,
+  marginTop: 2
 },
 
 barControls: {
