@@ -1,32 +1,99 @@
 import TrackPlayer, { Capability, Event, State } from 'react-native-track-player';
+import * as FileSystem from 'expo-file-system';
 
 let playerReady = false;
+let playerInitPromise = null;
 let listenersBound = false;
 let activeSongId = null;
 const songRegistry = new Map();
+const activeSongListeners = new Set();
+
+function notifyActiveSongChange(songId, isPlaying, position, duration) {
+  for (const listener of activeSongListeners) {
+    try {
+      listener(songId, isPlaying, position, duration);
+    } catch {}
+  }
+}
 
 function extractState(playbackState) {
   return typeof playbackState === 'number' ? playbackState : playbackState?.state;
 }
 
+function getSongsInOrder() {
+  return Array.from(songRegistry.values()).filter(song => !!song?.uri);
+}
+
+async function resolveArtworkUri(song) {
+  try {
+    if (!song?.cover) return undefined;
+    if (!song.cover.startsWith('data:image/')) return song.cover;
+
+    const mime = song.cover.substring(5, song.cover.indexOf(';')) || 'image/jpeg';
+    const ext = mime.includes('png') ? 'png' : 'jpg';
+    const base64 = song.cover.split(',')[1];
+    if (!base64) return undefined;
+
+    const fileUri = `${FileSystem.cacheDirectory}artwork_${encodeURIComponent(String(song.id))}.${ext}`;
+    const info = await FileSystem.getInfoAsync(fileUri);
+    if (!info.exists) {
+      await FileSystem.writeAsStringAsync(fileUri, base64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+    }
+    return fileUri;
+  } catch {
+    return undefined;
+  }
+}
+
+async function toTrack(song) {
+  const artwork = await resolveArtworkUri(song);
+  return {
+    id: String(song.id),
+    url: song.uri,
+    title: song.title,
+    artist: song.artist,
+    album: song.album,
+    artwork,
+    duration: song.duration || undefined,
+  };
+}
+
 async function ensurePlayer() {
   if (playerReady) return;
 
-  await TrackPlayer.setupPlayer();
-  await TrackPlayer.updateOptions({
-    capabilities: [
-      Capability.Play,
-      Capability.Pause,
-      Capability.Stop,
-      Capability.SkipToNext,
-      Capability.SkipToPrevious,
-      Capability.SeekTo,
-    ],
-    compactCapabilities: [Capability.Play, Capability.Pause, Capability.Stop],
-    progressUpdateEventInterval: 1,
-  });
+  if (!playerInitPromise) {
+    playerInitPromise = (async () => {
+      try {
+        await TrackPlayer.setupPlayer();
+      } catch (error) {
+        const message = String(error?.message || error || '');
+        if (!message.toLowerCase().includes('already been initialized')) {
+          throw error;
+        }
+      }
 
-  playerReady = true;
+      await TrackPlayer.updateOptions({
+        capabilities: [
+          Capability.Play,
+          Capability.Pause,
+          Capability.Stop,
+          Capability.SkipToNext,
+          Capability.SkipToPrevious,
+          Capability.SeekTo,
+        ],
+        compactCapabilities: [Capability.Play, Capability.Pause, Capability.Stop],
+        progressUpdateEventInterval: 1,
+      });
+
+      playerReady = true;
+    })().finally(() => {
+      playerInitPromise = null;
+    });
+  }
+
+  await playerInitPromise;
 }
 
 function bindGlobalListeners() {
@@ -37,7 +104,22 @@ function bindGlobalListeners() {
     const song = songRegistry.get(activeSongId);
     if (song) {
       song.isPlaying = state === State.Playing;
+      notifyActiveSongChange(activeSongId, song.isPlaying);
     }
+  });
+
+  TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, ({ position, duration }) => {
+    if (!activeSongId) return;
+    const song = songRegistry.get(activeSongId);
+    if (!song) return;
+
+    if (duration && !song.duration) {
+      song.duration = duration;
+    }
+    if (song.onProgress) {
+      song.onProgress(position || 0, duration || song.duration || 0);
+    }
+    notifyActiveSongChange(activeSongId, song.isPlaying, position || 0, duration || song.duration || 0);
   });
 
   TrackPlayer.addEventListener(Event.PlaybackQueueEnded, () => {
@@ -48,6 +130,19 @@ function bindGlobalListeners() {
 
     song.isPlaying = false;
     if (song.onEnded) song.onEnded(song);
+    notifyActiveSongChange(activeSongId, false);
+  });
+
+  TrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, ({ track }) => {
+    if (!track?.id) return;
+
+    activeSongId = String(track.id);
+    for (const [id, song] of songRegistry.entries()) {
+      if (id !== activeSongId) {
+        song.isPlaying = false;
+      }
+    }
+    notifyActiveSongChange(activeSongId);
   });
 
   listenersBound = true;
@@ -55,6 +150,11 @@ function bindGlobalListeners() {
 
 // class used to store the song information
 export default class Song {
+  static onActiveSongChange(listener) {
+    activeSongListeners.add(listener);
+    return () => activeSongListeners.delete(listener);
+  }
+
   //------------ constructor ------------//
   constructor({ id, title, artist, album, duration, uri, cover }) {
     this.id = id;
@@ -115,16 +215,21 @@ export default class Song {
       const previousSong = activeSongId ? songRegistry.get(activeSongId) : null;
       if (previousSong) previousSong.isPlaying = false;
 
-      await TrackPlayer.reset();
-      await TrackPlayer.add({
-        id: String(this.id),
-        url: this.uri,
-        title: this.title,
-        artist: this.artist,
-        album: this.album,
-        artwork: this.cover || undefined,
-        duration: this.duration || undefined,
-      });
+      const songs = getSongsInOrder();
+      const targetIndex = songs.findIndex(song => song.id === this.id);
+      if (targetIndex < 0) {
+        await TrackPlayer.reset();
+        await TrackPlayer.add(await toTrack(this));
+      } else {
+        const queue = [];
+        for (const queueSong of songs) {
+          queue.push(await toTrack(queueSong));
+        }
+        await TrackPlayer.reset();
+        await TrackPlayer.add(queue);
+        await TrackPlayer.skip(targetIndex);
+      }
+
       await TrackPlayer.play();
 
       activeSongId = this.id;
@@ -177,6 +282,7 @@ export default class Song {
       this.isPlaying = false;
       await TrackPlayer.stop();
       await TrackPlayer.reset();
+      notifyActiveSongChange(null, false);
     } catch {
       this.isPlaying = false;
     }
