@@ -2,7 +2,7 @@
 import DatabaseManager from './classes/DatabaseManager';
 import SongManager from './classes/SongManager';
 import React from 'react';
-import MainScreen from './frontend/MainScreen'; // Importamos tu UI
+import MainScreen from './frontend/MainScreen'; // we import the ui 
 import { AudioProvider } from './AudioContext';
 
 export default function App() {
@@ -25,8 +25,9 @@ const cargarApp = async () => {
 
     if (canciones.length === 0) {
         // If the database is empty, scan the phone (this only happens the first time)
+        //predeterminated space for music in the device
         console.log("Scanning files for the first time...");
-        canciones = await miSongManager.scanFolder('ruta/a/tu/musica');
+        canciones = await miSongManager.scanFolder('storage/emulated/0/music');
     }
 
     console.log("songs ready to show:", canciones.length);
