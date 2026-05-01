@@ -1,14 +1,26 @@
+// Main screen: displays song list, playback bar, and folder selection.
+// React and React Native primitives used across the component.
 import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, FlatList,Image } from 'react-native';
+
+// UI sub-component that renders each song row.
 import SongItem from './SongItem';
+
+// Persistent storage for remembering last selected folder.
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Icon set used for the shuffle control.
 import { MaterialIcons } from '@expo/vector-icons';
 
-// we import FileSystem to use the folder selector 
-import * as FileSystem from 'expo-file-system/legacy'; 
+// Legacy FileSystem used to request directory permissions via SAF.
+import * as FileSystem from 'expo-file-system/legacy';
+
+// Managers and models from the classes/ folder.
 import SongManager from '../classes/SongManager';
 import DatabaseManager from '../classes/DatabaseManager';
 import Song from '../classes/Song';
+
+// Create shared DB and SongManager instances used by the UI.
 const db = new DatabaseManager();
 const songManager = new SongManager(db);
 
@@ -55,21 +67,28 @@ export default function MainScreen() {
   
 
 
+// Keep a ref copy of the songs array so event handlers read the latest list
+// without needing to add it to their dependency arrays.
 useEffect(() => {
   songsRef.current = songs;
 }, [songs]);
 
+// Subscribe to global active-song changes emitted by the Song wrapper.
+// This keeps the UI in sync with playback changes coming from notifications
+// or background service events (play/pause/skip) managed by Track Player.
 useEffect(() => {
   const unsubscribe = Song.onActiveSongChange((songId, playing, position, duration) => {
     const list = songsRef.current;
     if (!list?.length) return;
 
+    // When there is no active track, reset playback UI state.
     if (!songId) {
       setIsPlaying(false);
       setCurrentPosition(0);
       return;
     }
 
+    // Find the song in the current list and update UI state accordingly.
     const nextIndex = list.findIndex(s => String(s.id) === String(songId));
     if (nextIndex < 0) return;
 
@@ -94,13 +113,15 @@ useEffect(() => {
   return unsubscribe;
 }, []);
 
+// On mount, attempt to restore previously scanned songs from the DB.
+// If none exist, try loading the last selected folder and scanning it.
 useEffect(() => {
   const restore = async () => {
-    // 1️ try DB first
+    // 1) Try loading cached songs from DB.
     const cached = await songManager.loadFromCache(setSongs);
     if (cached.length) return;
 
-    // 2️ fallback to last folder
+    // 2) If DB empty, try the last selected folder URI and scan it.
     const lastFolder = await AsyncStorage.getItem('last_music_folder');
     if (lastFolder) {
       const songs = await songManager.scanFolder(lastFolder, setSongs);
@@ -136,7 +157,7 @@ const handleSongPress = async (song) => {
   setCurrentDuration(song.duration || 0);
 };
 
-// next button logig
+// Next button logic: advances to the next track or picks a random one when shuffle is active.
 const handleNext = async () => {
   if (!songs.length) return;
 
@@ -166,7 +187,7 @@ const handleNext = async () => {
   setCurrentDuration(nextSong.duration || 0);
 };
 
-//prev button logic
+// Previous button logic: uses history when shuffling or steps back in the list.
 
 const handlePrev = async () => {
   if (!songs.length) return;
@@ -198,6 +219,7 @@ const handlePrev = async () => {
 handleNextRef.current = handleNext;
 
 
+// Folder selector: requests SAF directory permissions and triggers a fast scan.
 const seleccionarCarpeta = async () => {
   const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
   
@@ -205,13 +227,14 @@ const seleccionarCarpeta = async () => {
     setLoading(true);
     const folderUri = permissions.directoryUri;
     
-    // we send 'setSongs' as the "notifier" (onUpdate)
-    // So, each time SongManager finishes a song, it will automatically call setSongs
+    // Provide `setSongs` as the onUpdate callback so SongManager will
+    // push progressive updates back to the UI while scanning.
     const initialSongs = await songManager.scanFolder(folderUri, (updatedList) => {
         setSongs(updatedList); 
         setScanCount(updatedList.length || 0);
     });
     
+    // Set the initial list and final count when the fast scan returns.
     setSongs(initialSongs);
     setScanCount(initialSongs.length || 0);
     setLoading(false);
