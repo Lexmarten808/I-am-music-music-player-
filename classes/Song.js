@@ -1,14 +1,24 @@
+// React Native Track Player for audio playback and notifications.
 import TrackPlayer, { Capability, Event, State } from 'react-native-track-player';
+// Platform detection for Android/iOS-specific code.
 import { Platform } from 'react-native';
+// Legacy FileSystem API for file operations and content URIs on Android.
 import * as FileSystem from 'expo-file-system/legacy';
 
+// Tracks whether the Track Player has been initialized.
 let playerReady = false;
+// Stores the promise for player setup to avoid duplicate initialization.
 let playerInitPromise = null;
+// Flag to ensure global listeners are bound only once.
 let listenersBound = false;
+// ID of the currently playing song.
 let activeSongId = null;
+// Map of all song instances indexed by ID for quick lookups.
 const songRegistry = new Map();
+// Set of callback functions that listen for active song changes.
 const activeSongListeners = new Set();
 
+// Notifies all listeners when the active song changes or playback state updates.
 function notifyActiveSongChange(songId, isPlaying, position, duration) {
   for (const listener of activeSongListeners) {
     try {
@@ -17,15 +27,19 @@ function notifyActiveSongChange(songId, isPlaying, position, duration) {
   }
 }
 
+// Extracts the numeric state from the playback state object (handles both formats).
 function extractState(playbackState) {
   return typeof playbackState === 'number' ? playbackState : playbackState?.state;
 }
 
+// Returns all registered songs that have valid URIs (playable songs).
 function getSongsInOrder() {
   return Array.from(songRegistry.values()).filter(song => !!song?.uri);
 }
 
+// Generates a stable, short hash from a string for use in filenames.
 function hashString(value) {
+  // Use FNV-1a hash algorithm for fast, stable results.
   let hash = 0x811c9dc5;
   const input = String(value || '');
   for (let i = 0; i < input.length; i++) {
@@ -35,36 +49,51 @@ function hashString(value) {
   return hash.toString(16);
 }
 
+// Resolves artwork cover art to a usable file URI for Track Player notifications.
+// On Android, converts base64 data URIs to content:// URIs for better compatibility.
 async function resolveArtworkUri(song) {
   try {
+    // Return undefined if no cover art is available.
     if (!song?.cover) return undefined;
+    // Return non-data URIs as-is (already file or http URLs).
     if (!song.cover.startsWith('data:image/')) return song.cover;
 
+    // Extract MIME type from the data URI.
     const mime = song.cover.substring(5, song.cover.indexOf(';')) || 'image/jpeg';
+    // Determine file extension based on MIME type.
     const ext = mime.includes('png') ? 'png' : 'jpg';
+    // Extract base64 content from the data URI.
     const base64 = song.cover.split(',')[1];
+    // Return undefined if the base64 data is missing.
     if (!base64) return undefined;
 
+    // Generate a short, stable filename using hash.
     const key = hashString(song.id || song.uri || song.title || 'artwork');
     const fileUri = `${FileSystem.cacheDirectory}artwork_${key}.${ext}`;
+    // Check if the cached file already exists.
     const info = await FileSystem.getInfoAsync(fileUri);
+    // Write base64 artwork to cache directory if it doesn't exist.
     if (!info.exists) {
       await FileSystem.writeAsStringAsync(fileUri, base64, {
         encoding: FileSystem.EncodingType.Base64,
       });
     }
+    // On Android, convert file URI to content:// URI for better system integration.
     if (Platform.OS === 'android' && typeof FileSystem.getContentUriAsync === 'function') {
       try {
         return await FileSystem.getContentUriAsync(fileUri);
       } catch {}
     }
+    // Fall back to file URI if content URI conversion fails or not on Android.
     return fileUri;
   } catch {
     return undefined;
   }
 }
 
+// Converts a Song instance to a Track Player track object format.
 async function toTrack(song) {
+  // Resolve and cache artwork URIs for notifications.
   const artwork = await resolveArtworkUri(song);
   return {
     id: String(song.id),
@@ -77,15 +106,18 @@ async function toTrack(song) {
   };
 }
 
-/* Updates the metadata for a track.
- * This helps update the notification information, including the cover.
- */
+// Updates an existing track's metadata in Track Player, including artwork and title.
+// This refreshes the notification display when metadata becomes available.
 async function updateTrackMetadata(song) {
   try {
+    // Skip if the song lacks an ID.
     if (!song?.id) return;
+    // Skip if the API method is not available (older Track Player versions).
     if (typeof TrackPlayer.updateMetadataForTrack !== 'function') return;
 
+    // Resolve artwork to a file or content URI.
     const artwork = await resolveArtworkUri(song);
+    // Update the track with new metadata.
     await TrackPlayer.updateMetadataForTrack(String(song.id), {
       title: song.title,
       artist: song.artist,
@@ -95,21 +127,29 @@ async function updateTrackMetadata(song) {
   } catch {}
 }
 
+// Ensures the Track Player is initialized and ready for playback.
+// Prevents duplicate initialization by using a shared promise.
 async function ensurePlayer() {
+  // Return immediately if player is already ready.
   if (playerReady) return;
 
+  // Set up the player only once using a shared promise.
   if (!playerInitPromise) {
     playerInitPromise = (async () => {
       try {
+        // Initialize the Track Player.
         await TrackPlayer.setupPlayer();
       } catch (error) {
+        // Ignore "already initialized" errors; other errors are re-thrown.
         const message = String(error?.message || error || '');
         if (!message.toLowerCase().includes('already been initialized')) {
           throw error;
         }
       }
 
+      // Configure player capabilities for notifications and controls.
       await TrackPlayer.updateOptions({
+        // Full set of controls available in expanded notification.
         capabilities: [
           Capability.Play,
           Capability.Pause,
@@ -117,160 +157,226 @@ async function ensurePlayer() {
           Capability.SkipToNext,
           Capability.SkipToPrevious,
           Capability.SeekTo,
+          
         ],
+        // Simplified controls for compact notification view.
         compactCapabilities: [Capability.Play, Capability.Pause, Capability.Stop],
+        // Update progress bar every 1 second.
         progressUpdateEventInterval: 1,
       });
 
+      // Mark player as ready.
       playerReady = true;
     })().finally(() => {
+      // Clear the init promise after completion.
       playerInitPromise = null;
     });
   }
 
+  // Wait for the initialization to complete.
   await playerInitPromise;
 }
 
+// Binds global Track Player event listeners for playback state, progress, and track changes.
 function bindGlobalListeners() {
+  // Skip if listeners are already bound.
   if (listenersBound) return;
 
+  // Listen for play/pause state changes.
   TrackPlayer.addEventListener(Event.PlaybackState, ({ state }) => {
     if (!activeSongId) return;
     const song = songRegistry.get(activeSongId);
     if (song) {
+      // Update the song's playback state.
       song.isPlaying = state === State.Playing;
+      // Notify UI listeners of the change.
       notifyActiveSongChange(activeSongId, song.isPlaying);
     }
   });
 
+  // Listen for playback progress updates.
   TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, ({ position, duration }) => {
     if (!activeSongId) return;
     const song = songRegistry.get(activeSongId);
     if (!song) return;
 
+    // Cache duration if just received from the track.
     if (duration && !song.duration) {
       song.duration = duration;
     }
+    // Invoke progress callback if set.
     if (song.onProgress) {
       song.onProgress(position || 0, duration || song.duration || 0);
     }
+    // Notify UI with current position and duration.
     notifyActiveSongChange(activeSongId, song.isPlaying, position || 0, duration || song.duration || 0);
   });
 
+  // Listen for when the current track ends.
   TrackPlayer.addEventListener(Event.PlaybackQueueEnded, () => {
     if (!activeSongId) return;
 
     const song = songRegistry.get(activeSongId);
     if (!song) return;
 
+    // Mark song as stopped.
     song.isPlaying = false;
+    // Invoke end callback if set.
     if (song.onEnded) song.onEnded(song);
+    // Notify UI that playback ended.
     notifyActiveSongChange(activeSongId, false);
   });
 
+  // Listen for when a different track becomes active (e.g., skip, notification click).
   TrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, ({ track }) => {
     if (!track?.id) return;
 
+    // Update the active song ID.
     activeSongId = String(track.id);
+    // Mark all other songs as not playing.
     for (const [id, song] of songRegistry.entries()) {
       if (id !== activeSongId) {
         song.isPlaying = false;
       }
     }
+    // Notify UI of the track change.
     notifyActiveSongChange(activeSongId);
   });
 
+  // Mark listeners as bound to avoid re-binding.
   listenersBound = true;
 }
 
-// class used to store the song information
+// Main Song class: represents a single audio track with playback controls.
 export default class Song {
+  // Registers a listener for active song changes and returns an unsubscribe function.
   static onActiveSongChange(listener) {
     activeSongListeners.add(listener);
     return () => activeSongListeners.delete(listener);
   }
 
+  // Static wrapper to update an existing track's metadata in the player.
   static async updateTrackMetadata(song) {
     await updateTrackMetadata(song);
   }
 
-  //------------ constructor ------------//
+  // --- Constructor ---
   constructor({ id, title, artist, album, duration, uri, cover }) {
+    // Unique identifier for the song.
     this.id = id;
+    // Display title with fallback to 'unknown title'.
     this.title = title || 'unkwown title';
+    // Artist name with fallback.
     this.artist = artist || 'unknown artist';
+    // Album name with fallback.
     this.album = album || 'unknown album';
+    // Duration in seconds, defaults to 0.
     this.duration = duration || 0;
+    // Cover artwork URI (data URI, file URI, or HTTP URL).
     this.cover = cover || null;
+    // File or stream URI for playback.
     this.uri = uri;
 
+    // Sound object (not currently used with Track Player, kept for compatibility).
     this.sound = null;
+    // Whether the song is currently playing.
     this.isPlaying = false;
 
+    // Callback invoked when playback progress updates.
     this.onProgress = null;
+    // Callback invoked when the song ends.
     this.onEnded = null;
+    // Interval ID for progress tracking (if needed).
     this._progressInterval = null;
 
+    // Register this song instance in the global registry.
     songRegistry.set(this.id, this);
   }
 
-  //------------ getters/setters ------------//
+  // --- Getter Methods ---
+  // Returns the song's unique identifier.
   getId() { return this.id; }
+  // Returns the song's title.
   getTitle() { return this.title; }
+  // Returns the artist name.
   getArtist() { return this.artist; }
+  // Returns the album name.
   getAlbum() { return this.album; }
+  // Returns the duration in seconds.
   getDuration() { return this.duration; }
+  // Returns the playback URI.
   getUri() { return this.uri; }
+  // Returns the cover artwork URI.
   getCover() { return this.cover; }
 
-  //------------ setters ------------//
+  // --- Setter Methods ---
+  // Updates the song's title.
   setTitle(title) { this.title = title; }
+  // Updates the artist name.
   setArtist(artist) { this.artist = artist; }
+  // Updates the album name.
   setAlbum(album) { this.album = album; }
+  // Updates the duration in seconds.
   setDuration(duration) { this.duration = duration; }
+  // Updates the cover artwork URI.
   setCover(cover) { this.cover = cover; }
 
-  //------------ playback ------------//
+  // --- Playback Controls ---
+  // Initializes the player and binds event listeners.
   async load() {
     try {
+      // Ensure Track Player is ready.
       await ensurePlayer();
+      // Bind global event listeners.
       bindGlobalListeners();
     } catch (error) {
       console.error('Sound load error:', error);
     }
   }
 
+  // Plays this song; if already active, resumes playback.
   async play() {
     try {
+      // Ensure player is initialized.
       await ensurePlayer();
+      // Ensure listeners are bound.
       bindGlobalListeners();
 
+      // If this song is already active, just resume playback.
       if (activeSongId === this.id) {
         await TrackPlayer.play();
         this.isPlaying = true;
         return;
       }
 
+      // Stop the previously active song.
       const previousSong = activeSongId ? songRegistry.get(activeSongId) : null;
       if (previousSong) previousSong.isPlaying = false;
 
+      // Get all registered songs for the queue.
       const songs = getSongsInOrder();
+      // Find the index of this song in the queue.
       const targetIndex = songs.findIndex(song => song.id === this.id);
+      // If this song is not in the registry, add it as a standalone track.
       if (targetIndex < 0) {
         await TrackPlayer.reset();
         await TrackPlayer.add(await toTrack(this));
       } else {
+        // Build and add the full queue to the player.
         const queue = [];
         for (const queueSong of songs) {
           queue.push(await toTrack(queueSong));
         }
         await TrackPlayer.reset();
         await TrackPlayer.add(queue);
+        // Skip to this song in the queue.
         await TrackPlayer.skip(targetIndex);
       }
 
+      // Start playback.
       await TrackPlayer.play();
 
+      // Update the active song.
       activeSongId = this.id;
       this.isPlaying = true;
     } catch (error) {
@@ -278,8 +384,10 @@ export default class Song {
     }
   }
 
+  // Pauses playback if this song is currently active.
   async pause() {
     try {
+      // Only pause if this is the active song.
       if (activeSongId !== this.id) return;
       await TrackPlayer.pause();
       this.isPlaying = false;
@@ -288,17 +396,22 @@ export default class Song {
     }
   }
 
+  // Toggles between play and pause; plays this song if it's not active.
   async togglePlayPause() {
     try {
+      // Ensure player is initialized.
       await ensurePlayer();
 
+      // If this song is not active, play it.
       if (activeSongId !== this.id) {
         await this.play();
         return;
       }
 
+      // Get the current playback state.
       const playbackState = await TrackPlayer.getPlaybackState();
       const state = extractState(playbackState);
+      // Toggle between play and pause.
       if (state === State.Playing) {
         await this.pause();
       } else {
@@ -310,46 +423,64 @@ export default class Song {
     }
   }
 
+  // Stops playback if this song is currently active.
   async stop() {
     try {
+      // If this song is not active, just mark it as not playing.
       if (activeSongId !== this.id) {
         this.isPlaying = false;
         return;
       }
 
+      // Clear the active song ID.
       activeSongId = null;
       this.isPlaying = false;
+      // Stop the Track Player.
       await TrackPlayer.stop();
+      // Clear the player queue.
       await TrackPlayer.reset();
+      // Notify listeners that nothing is playing.
       notifyActiveSongChange(null, false);
     } catch {
       this.isPlaying = false;
     }
   }
 
+  // Seeks to a specific position in seconds if this song is active.
   async seek(seconds) {
     try {
+      // Only seek if this is the active song.
       if (activeSongId !== this.id) return;
+      // Move playback to the specified time.
       await TrackPlayer.seekTo(seconds);
     } catch (error) {
       console.error('Error en seek():', error);
     }
   }
 
-  //------------ formatted duration ------------//
+  // --- Duration Formatting ---
+  // Returns the duration as a formatted string (mm:ss).
   getFormattedDuration() {
+    // Convert total seconds to minutes.
     const minutes = Math.floor(this.duration / 60);
+    // Get remaining seconds.
     const seconds = Math.floor(this.duration % 60);
+    // Format with leading zero for seconds if needed.
     return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
   }
 
-  //------------ event setters ------------//
+  // --- Event Callback Setters ---
+  // Registers a callback to be invoked during playback progress updates.
   setOnProgress(callback) { this.onProgress = callback; }
+  // Registers a callback to be invoked when the song ends.
   setOnEnded(callback) { this.onEnded = callback; }
 
-  //------------ unload ------------//
+  // --- Cleanup ---
+  // Stops playback if active and cleans up resources.
   async unload() {
+    // Mark as not playing.
     this.isPlaying = false;
+    // Stop the track if it's currently active.
     if (activeSongId === this.id) {
       await this.stop();
     }

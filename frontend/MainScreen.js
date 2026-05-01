@@ -4,7 +4,7 @@ import SongItem from './SongItem';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 
-// Importamos FileSystem para usar el selector de carpetas
+// we import FileSystem to use the folder selector 
 import * as FileSystem from 'expo-file-system/legacy'; 
 import SongManager from '../classes/SongManager';
 import DatabaseManager from '../classes/DatabaseManager';
@@ -375,7 +375,7 @@ const processVisibleItems = async () => {
   );
 }
 
-// ... (los estilos se mantienen igual)
+// STYLES...
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#121212', paddingTop: 50 },
   header: { fontSize: 24, color: '#fff', fontWeight: 'bold', textAlign: 'center', marginBottom: 20 },
