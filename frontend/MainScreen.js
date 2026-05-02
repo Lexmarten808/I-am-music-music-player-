@@ -15,14 +15,10 @@ import { MaterialIcons } from '@expo/vector-icons';
 // Legacy FileSystem used to request directory permissions via SAF.
 import * as FileSystem from 'expo-file-system/legacy';
 
-// Managers and models from the classes/ folder.
-import SongManager from '../classes/SongManager';
-import DatabaseManager from '../classes/DatabaseManager';
-import Song from '../classes/Song';
-
-// Create shared DB and SongManager instances used by the UI.
-const db = new DatabaseManager();
-const songManager = new SongManager(db);
+// Refactored state/services for playback and library access.
+import useMusicLibrary from '../hooks/useMusicLibrary';
+import usePlayerControls from '../hooks/usePlayerControls';
+import { usePlayback } from './PlaybackContext';
 
 
 export default function MainScreen() {
@@ -30,31 +26,38 @@ export default function MainScreen() {
   const songsRef = useRef([]);
   const handleNextRef = useRef(null);
 
-  const [songs, setSongs] = useState([]);
   const [loading, setLoading] = useState(false);
   const loadingRef = useRef(new Set());
   const [scanCount, setScanCount] = useState(0);
-  const [currentSong, setCurrentSong] = useState(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentIndex, setCurrentIndex] = useState(-1);
   const [isShuffle, setIsShuffle] = useState(false);
-  const [history, setHistory] = useState([]);
-  const [currentPosition, setCurrentPosition] = useState(0);
-  const [currentDuration, setCurrentDuration] = useState(0);
+  const { state: playback, actions: playbackActions } = usePlayback();
+  const { songs, scanning, scanFolder, reload, loadCover } = useMusicLibrary();
+  const player = usePlayerControls();
+
+  const currentSong = songs.find(s => String(s.id) === String(playback.activeSongId)) || null;
+  const currentIndex = playback.currentIndex;
+  const history = playback.history;
+  const isPlaying = playback.isPlaying;
+  const currentPosition = playback.position;
+  const currentDuration = playback.duration;
 
   const bindSongCallbacks = (song) => {
     if (!song) return;
-    song.setOnEnded(async () => {
-      if (handleNextRef.current) {
-        await handleNextRef.current();
-      }
-    });
-    song.setOnProgress((position, duration) => {
-      setCurrentPosition(position || 0);
-      if (duration) {
-        setCurrentDuration(duration);
-      }
-    });
+    if (typeof song.setOnEnded === 'function') {
+      song.setOnEnded(async () => {
+        if (handleNextRef.current) {
+          await handleNextRef.current();
+        }
+      });
+    }
+    if (typeof song.setOnProgress === 'function') {
+      song.setOnProgress((position, duration) => {
+        playbackActions.setPosition(position || 0);
+        if (duration) {
+          playbackActions.setDuration(duration);
+        }
+      });
+    }
   };
 
   const formatTime = (seconds) => {
@@ -67,94 +70,29 @@ export default function MainScreen() {
   
 
 
-// Keep a ref copy of the songs array so event handlers read the latest list
-// without needing to add it to their dependency arrays.
 useEffect(() => {
   songsRef.current = songs;
+  setScanCount(songs.length || 0);
 }, [songs]);
 
-// Subscribe to global active-song changes emitted by the Song wrapper.
-// This keeps the UI in sync with playback changes coming from notifications
-// or background service events (play/pause/skip) managed by Track Player.
-useEffect(() => {
-  const unsubscribe = Song.onActiveSongChange((songId, playing, position, duration) => {
-    const list = songsRef.current;
-    if (!list?.length) return;
-
-    // When there is no active track, reset playback UI state.
-    if (!songId) {
-      setIsPlaying(false);
-      setCurrentPosition(0);
-      return;
-    }
-
-    // Find the song in the current list and update UI state accordingly.
-    const nextIndex = list.findIndex(s => String(s.id) === String(songId));
-    if (nextIndex < 0) return;
-
-    const nextSong = list[nextIndex];
-    bindSongCallbacks(nextSong);
-    setCurrentSong(nextSong);
-    setCurrentIndex(nextIndex);
-    setCurrentDuration(nextSong.duration || duration || 0);
-    if (typeof playing === 'boolean') {
-      setIsPlaying(playing);
-    } else {
-      setIsPlaying(nextSong.isPlaying);
-    }
-    if (typeof position === 'number') {
-      setCurrentPosition(position);
-    }
-    if (typeof duration === 'number' && duration > 0) {
-      setCurrentDuration(duration);
-    }
-  });
-
-  return unsubscribe;
-}, []);
-
-// On mount, attempt to restore previously scanned songs from the DB.
-// If none exist, try loading the last selected folder and scanning it.
-useEffect(() => {
-  const restore = async () => {
-    // 1) Try loading cached songs from DB.
-    const cached = await songManager.loadFromCache(setSongs);
-    if (cached.length) return;
-
-    // 2) If DB empty, try the last selected folder URI and scan it.
-    const lastFolder = await AsyncStorage.getItem('last_music_folder');
-    if (lastFolder) {
-      const songs = await songManager.scanFolder(lastFolder, setSongs);
-      setSongs(songs);
-    }
-  };
-
-  restore();
-}, []);
 const handleSongPress = async (song) => {
   const index = songs.findIndex(s => s.id === song.id);
 
   // same song → toggle
   if (currentIndex === index) {
-    await song.togglePlayPause();
-    setIsPlaying(song.isPlaying);
+    playbackActions.setPlaying(!playback.isPlaying);
+    player.toggle(song).catch(() => {});
     return;
   }
 
-  // stop old song
-  if (currentSong) {
-    await currentSong.stop();
-  }
-
   // play new song
-  await song.play();
   bindSongCallbacks(song);
-
-  setCurrentSong(song);
-  setCurrentIndex(index);
-  setIsPlaying(true);
-  setCurrentPosition(0);
-  setCurrentDuration(song.duration || 0);
+  playbackActions.setActiveSongId(song.id);
+  playbackActions.setIndex(index);
+  playbackActions.setPlaying(true);
+  playbackActions.setPosition(0);
+  playbackActions.setDuration(song.duration || 0);
+  player.loadAndPlay(song).catch(() => {});
 };
 
 // Next button logic: advances to the next track or picks a random one when shuffle is active.
@@ -168,23 +106,20 @@ const handleNext = async () => {
     nextIndex = Math.floor(Math.random() * songs.length);
   } while (nextIndex === currentIndex && songs.length > 1);
 
-    setHistory(prev => [...prev, currentIndex]);
+    playbackActions.pushHistory(currentIndex);
   } else {
     nextIndex = (currentIndex + 1) % songs.length;
   }
 
   const nextSong = songs[nextIndex];
 
-  if (currentSong) await currentSong.stop();
-
-  await nextSong.play();
   bindSongCallbacks(nextSong);
-
-  setCurrentSong(nextSong);
-  setCurrentIndex(nextIndex);
-  setIsPlaying(true);
-  setCurrentPosition(0);
-  setCurrentDuration(nextSong.duration || 0);
+  playbackActions.setActiveSongId(nextSong.id);
+  playbackActions.setIndex(nextIndex);
+  playbackActions.setPlaying(true);
+  playbackActions.setPosition(0);
+  playbackActions.setDuration(nextSong.duration || 0);
+  player.loadAndPlay(nextSong).catch(() => {});
 };
 
 // Previous button logic: uses history when shuffling or steps back in the list.
@@ -196,7 +131,7 @@ const handlePrev = async () => {
 
   if (shuffleRef.current && history.length) {
     prevIndex = history[history.length - 1];
-    setHistory(h => h.slice(0, -1));
+    playbackActions.clearHistory();
   } else {
     prevIndex =
       currentIndex === 0 ? songs.length - 1 : currentIndex - 1;
@@ -204,16 +139,13 @@ const handlePrev = async () => {
 
   const prevSong = songs[prevIndex];
 
-  if (currentSong) await currentSong.stop();
-
-  await prevSong.play();
   bindSongCallbacks(prevSong);
-
-  setCurrentSong(prevSong);
-  setCurrentIndex(prevIndex);
-  setIsPlaying(true);
-  setCurrentPosition(0);
-  setCurrentDuration(prevSong.duration || 0);
+  playbackActions.setActiveSongId(prevSong.id);
+  playbackActions.setIndex(prevIndex);
+  playbackActions.setPlaying(true);
+  playbackActions.setPosition(0);
+  playbackActions.setDuration(prevSong.duration || 0);
+  player.loadAndPlay(prevSong).catch(() => {});
 };
 
 handleNextRef.current = handleNext;
@@ -227,16 +159,9 @@ const seleccionarCarpeta = async () => {
     setLoading(true);
     const folderUri = permissions.directoryUri;
     
-    // Provide `setSongs` as the onUpdate callback so SongManager will
-    // push progressive updates back to the UI while scanning.
-    const initialSongs = await songManager.scanFolder(folderUri, (updatedList) => {
-        setSongs(updatedList); 
-        setScanCount(updatedList.length || 0);
+    await scanFolder(folderUri, (updatedList) => {
+      setScanCount(updatedList.length || 0);
     });
-    
-    // Set the initial list and final count when the fast scan returns.
-    setSongs(initialSongs);
-    setScanCount(initialSongs.length || 0);
     setLoading(false);
   }
 };
@@ -268,7 +193,7 @@ const processVisibleItems = async () => {
       loadingRef.current.add(item.id);
       
       try {
-        const meta = await songManager.loadCoverOnDemand(item);
+        const meta = await loadCover(item);
         
         if (meta) {
           // IMPORTANTE: Actualizamos las propiedades del objeto EXISTENTE

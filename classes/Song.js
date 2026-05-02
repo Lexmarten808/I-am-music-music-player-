@@ -13,6 +13,14 @@ let playerInitPromise = null;
 let listenersBound = false;
 // ID of the currently playing song.
 let activeSongId = null;
+// Cache version for the playable song registry.
+let songRegistryVersion = 0;
+// Cached playable songs and their indexes for quick skips.
+let cachedPlayableSongs = null;
+let cachedPlayableIndexById = new Map();
+let cachedPlayableSongsVersion = -1;
+// Cache signature for the TrackPlayer queue.
+let playableQueueSignature = null;
 // Map of all song instances indexed by ID for quick lookups.
 const songRegistry = new Map();
 // Set of callback functions that listen for active song changes.
@@ -35,6 +43,40 @@ function extractState(playbackState) {
 // Returns all registered songs that have valid URIs (playable songs).
 function getSongsInOrder() {
   return Array.from(songRegistry.values()).filter(song => !!song?.uri);
+}
+
+function getPlayableSongInfo(targetSongId) {
+  if (cachedPlayableSongsVersion !== songRegistryVersion || !cachedPlayableSongs) {
+    cachedPlayableSongs = getSongsInOrder();
+    cachedPlayableIndexById = new Map();
+    for (let i = 0; i < cachedPlayableSongs.length; i++) {
+      cachedPlayableIndexById.set(String(cachedPlayableSongs[i].id), i);
+    }
+    cachedPlayableSongsVersion = songRegistryVersion;
+  }
+
+  return {
+    songs: cachedPlayableSongs,
+    targetIndex: cachedPlayableIndexById.get(String(targetSongId)) ?? -1,
+  };
+}
+
+function getQueueSignature(songs) {
+  return songs.map(song => String(song.id)).join('|');
+}
+
+async function ensurePlayableQueue(songs) {
+  const signature = getQueueSignature(songs);
+  if (playableQueueSignature === signature) return;
+
+  const queue = [];
+  for (const queueSong of songs) {
+    queue.push(await toTrack(queueSong, false));
+  }
+
+  await TrackPlayer.reset();
+  await TrackPlayer.add(queue);
+  playableQueueSignature = signature;
 }
 
 // Generates a stable, short hash from a string for use in filenames.
@@ -92,9 +134,8 @@ async function resolveArtworkUri(song) {
 }
 
 // Converts a Song instance to a Track Player track object format.
-async function toTrack(song) {
-  // Resolve and cache artwork URIs for notifications.
-  const artwork = await resolveArtworkUri(song);
+async function toTrack(song, includeArtwork = true) {
+  const artwork = includeArtwork ? await resolveArtworkUri(song) : undefined;
   return {
     id: String(song.id),
     url: song.uri,
@@ -291,6 +332,9 @@ export default class Song {
 
     // Register this song instance in the global registry.
     songRegistry.set(this.id, this);
+    songRegistryVersion += 1;
+    cachedPlayableSongs = null;
+    cachedPlayableIndexById = new Map();
   }
 
   // --- Getter Methods ---
@@ -353,23 +397,14 @@ export default class Song {
       const previousSong = activeSongId ? songRegistry.get(activeSongId) : null;
       if (previousSong) previousSong.isPlaying = false;
 
-      // Get all registered songs for the queue.
-      const songs = getSongsInOrder();
-      // Find the index of this song in the queue.
-      const targetIndex = songs.findIndex(song => song.id === this.id);
+      // Get cached playable songs and this song's queue index.
+      const { songs, targetIndex } = getPlayableSongInfo(this.id);
       // If this song is not in the registry, add it as a standalone track.
       if (targetIndex < 0) {
         await TrackPlayer.reset();
-        await TrackPlayer.add(await toTrack(this));
+        await TrackPlayer.add(await toTrack(this, false));
       } else {
-        // Build and add the full queue to the player.
-        const queue = [];
-        for (const queueSong of songs) {
-          queue.push(await toTrack(queueSong));
-        }
-        await TrackPlayer.reset();
-        await TrackPlayer.add(queue);
-        // Skip to this song in the queue.
+        await ensurePlayableQueue(songs);
         await TrackPlayer.skip(targetIndex);
       }
 
@@ -379,6 +414,10 @@ export default class Song {
       // Update the active song.
       activeSongId = this.id;
       this.isPlaying = true;
+
+      // Refresh notification metadata after playback starts so cover art and
+      // labels appear without blocking the initial tap-to-play path.
+      Song.updateTrackMetadata(this).catch(() => {});
     } catch (error) {
       console.error('Error en play():', error);
     }
@@ -437,8 +476,6 @@ export default class Song {
       this.isPlaying = false;
       // Stop the Track Player.
       await TrackPlayer.stop();
-      // Clear the player queue.
-      await TrackPlayer.reset();
       // Notify listeners that nothing is playing.
       notifyActiveSongChange(null, false);
     } catch {
