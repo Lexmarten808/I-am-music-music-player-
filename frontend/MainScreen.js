@@ -1,7 +1,7 @@
 // Main screen: displays song list, playback bar, and folder selection.
 // React and React Native primitives used across the component.
 import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList,Image } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image } from 'react-native';
 
 // UI sub-component that renders each song row.
 import SongItem from './SongItem';
@@ -25,11 +25,17 @@ export default function MainScreen() {
   const shuffleRef = useRef(false);
   const songsRef = useRef([]);
   const handleNextRef = useRef(null);
+  const seekBarWidthRef = useRef(0);
+  const seekPositionRef = useRef(0);
+  const didImmediateSeekRef = useRef(false);
+  const lastImmediateSeekRef = useRef(0);
 
   const [loading, setLoading] = useState(false);
   const loadingRef = useRef(new Set());
   const [scanCount, setScanCount] = useState(0);
   const [isShuffle, setIsShuffle] = useState(false);
+  const [isSeeking, setIsSeeking] = useState(false);
+  const [seekPosition, setSeekPosition] = useState(0);
   const { state: playback, actions: playbackActions } = usePlayback();
   const { songs, scanning, scanFolder, reload, loadCover } = useMusicLibrary();
   const player = usePlayerControls();
@@ -40,6 +46,7 @@ export default function MainScreen() {
   const isPlaying = playback.isPlaying;
   const currentPosition = playback.position;
   const currentDuration = playback.duration;
+  const displayPosition = isSeeking ? seekPosition : currentPosition;
 
   const bindSongCallbacks = (song) => {
     if (!song) return;
@@ -67,6 +74,66 @@ export default function MainScreen() {
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
+  // Updates the seek bar while the user drags it and performs the actual seek on release.
+  const seekToPosition = async (x) => {
+    if (!currentSong || !currentDuration || seekBarWidthRef.current <= 0) return;
+    const nextPosition = Math.max(0, Math.min(currentDuration, (x / seekBarWidthRef.current) * currentDuration));
+
+    console.log('[Seek] seekToPosition', {
+      x,
+      nextPosition,
+      seekBarWidth: seekBarWidthRef.current,
+      currentPosition,
+      currentDuration,
+      isSeeking,
+    });
+
+    setSeekPosition(nextPosition);
+    seekPositionRef.current = nextPosition;
+
+    if (!isSeeking) {
+      setIsSeeking(true);
+    }
+  };
+
+  const commitSeek = async () => {
+    if (!currentSong || !currentDuration) {
+      setIsSeeking(false);
+      return;
+    }
+    const nextPosition = Math.max(0, Math.min(currentDuration, seekPositionRef.current || 0));
+
+    // If we already performed an immediate seek and the requested position
+    // hasn't changed, skip doing a second native seek to avoid visual jitter.
+    if (didImmediateSeekRef.current && Math.abs((lastImmediateSeekRef.current || 0) - nextPosition) < 0.5) {
+      console.log('[Seek] commitSeek skipping duplicate seek', { nextPosition });
+      didImmediateSeekRef.current = false;
+      setIsSeeking(false);
+      return;
+    }
+
+    const start = Date.now();
+    console.log('[Seek] commitSeek start', { nextPosition, seekPosition: seekPositionRef.current, currentPosition });
+    try {
+      await player.seek(currentSong, nextPosition);
+      console.log('[Seek] commitSeek finished', { nextPosition, tookMs: Date.now() - start });
+    } catch (e) {
+      console.error('[Seek] commitSeek error', e);
+    }
+
+    didImmediateSeekRef.current = false;
+    setIsSeeking(false);
+  };
+
+  // Use responder props on the seek container instead of PanResponder to
+  // ensure simpler, more reliable touch handling inside the FlatList UI.
+
+  useEffect(() => {
+    if (!isSeeking) {
+      setSeekPosition(currentPosition || 0);
+    }
+  }, [currentPosition, isSeeking]);
+
   
 
 
@@ -75,25 +142,19 @@ useEffect(() => {
   setScanCount(songs.length || 0);
 }, [songs]);
 
-const handleSongPress = async (song) => {
-  const index = songs.findIndex(s => s.id === song.id);
+  const handleSongPress = async (song) => {
+    const index = songs.findIndex(s => s.id === song.id);
 
-  // same song → toggle
-  if (currentIndex === index) {
-    playbackActions.setPlaying(!playback.isPlaying);
-    player.toggle(song).catch(() => {});
-    return;
-  }
+    // same song → toggle
+    if (currentIndex === index) {
+      player.toggle(song).catch(() => {});
+      return;
+    }
 
-  // play new song
-  bindSongCallbacks(song);
-  playbackActions.setActiveSongId(song.id);
-  playbackActions.setIndex(index);
-  playbackActions.setPlaying(true);
-  playbackActions.setPosition(0);
-  playbackActions.setDuration(song.duration || 0);
-  player.loadAndPlay(song).catch(() => {});
-};
+    // play new song
+    bindSongCallbacks(song);
+    player.loadAndPlay(song).catch(() => {});
+  };
 
 // Next button logic: advances to the next track or picks a random one when shuffle is active.
 const handleNext = async () => {
@@ -114,11 +175,6 @@ const handleNext = async () => {
   const nextSong = songs[nextIndex];
 
   bindSongCallbacks(nextSong);
-  playbackActions.setActiveSongId(nextSong.id);
-  playbackActions.setIndex(nextIndex);
-  playbackActions.setPlaying(true);
-  playbackActions.setPosition(0);
-  playbackActions.setDuration(nextSong.duration || 0);
   player.loadAndPlay(nextSong).catch(() => {});
 };
 
@@ -140,11 +196,6 @@ const handlePrev = async () => {
   const prevSong = songs[prevIndex];
 
   bindSongCallbacks(prevSong);
-  playbackActions.setActiveSongId(prevSong.id);
-  playbackActions.setIndex(prevIndex);
-  playbackActions.setPlaying(true);
-  playbackActions.setPosition(0);
-  playbackActions.setDuration(prevSong.duration || 0);
   player.loadAndPlay(prevSong).catch(() => {});
 };
 
@@ -245,78 +296,134 @@ const processVisibleItems = async () => {
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
         getItemLayout={getItemLayout}
+        
         contentContainerStyle={{ paddingBottom: 100 }}
         ListEmptyComponent={<Text style={{color: '#666', textAlign: 'center'}}>No hay canciones cargadas</Text>}
       />
       {currentSong && (
   <View style={styles.playbackBar}>
-    
-    {/* Cover */}
-    {currentSong.cover ? (
-      <View>
-        <Text />
-        <Image
-          source={{ uri: currentSong.cover }}
-          style={styles.barCover}
-        />
-      </View>
-    ) : (
-      <View style={[styles.barCover, styles.noCover]} />
-    )}
+    <View style={styles.playbackTopRow}>
+      {currentSong.cover ? (
+        <Image source={{ uri: currentSong.cover }} style={styles.barCover} />
+      ) : (
+        <View style={[styles.barCover, styles.noCover]} />
+      )}
 
-    {/* Song info */}
-    <View style={styles.barInfo}>
-      <Text style={styles.barTitle} numberOfLines={1}>
-        {currentSong.title}
-      </Text>
-      <Text style={styles.barArtist} numberOfLines={1}>
-        {currentSong.artist}
-      </Text>
-      <Text style={styles.barTime} numberOfLines={1}>
-        {formatTime(currentPosition)} / {formatTime(currentDuration || currentSong.duration || 0)}
-      </Text>
-    </View>
-
-    {/* Controls */}
-    <View style={styles.barControls}>
-      <TouchableOpacity onPress={handlePrev}>
-        <Text style={styles.controlText}>⏮</Text>
-      </TouchableOpacity>
-
-
-      <TouchableOpacity
-        onPress={async () => {
-          await currentSong.togglePlayPause();
-          setIsPlaying(currentSong.isPlaying);
-        }}
-      >
-        <Text style={styles.controlText}>
-          {isPlaying ? '⏸' : '▶️'}
+      <View style={styles.barInfo}>
+        <Text style={styles.barTitle} numberOfLines={1}>
+          {currentSong.title}
         </Text>
-      </TouchableOpacity>
+        <Text style={styles.barArtist} numberOfLines={1}>
+          {currentSong.artist}
+        </Text>
+        <Text style={styles.barTime} numberOfLines={1}>
+          {formatTime(displayPosition)} / {formatTime(currentDuration || currentSong.duration || 0)}
+        </Text>
+      </View>
 
-      <TouchableOpacity onPress={handleNext}>
-        <Text style={styles.controlText}>⏭</Text>
-      </TouchableOpacity>
+      <View style={styles.barControls}>
+        <TouchableOpacity style={styles.controlButtonSmall} onPress={handlePrev}>
+          <MaterialIcons name="skip-previous" size={22} color="#fff" />
+        </TouchableOpacity>
 
+        <TouchableOpacity
+          style={styles.controlButtonLarge}
+          onPress={async () => {
+            player.toggle(currentSong).catch(() => {});
+          }}
+        >
+          <MaterialIcons
+            name={isPlaying ? 'pause' : 'play-arrow'}
+            size={28}
+            color="#fff"
+          />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.controlButtonSmall} onPress={handleNext}>
+          <MaterialIcons name="skip-next" size={22} color="#fff" />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.controlButtonSmall}
+          onPress={() => {
+            setIsShuffle(s => {
+              const next = !s;
+              shuffleRef.current = next;
+              return next;
+            });
+          }}
+        >
+          <MaterialIcons
+            name="shuffle"
+            size={20}
+            color={isShuffle ? '#7C3AED' : '#fff'}
+          />
+        </TouchableOpacity>
+      </View>
     </View>
-      <TouchableOpacity
-        onPress={() => {
-          setIsShuffle(s => {
-            const next = !s;
-            shuffleRef.current = next;
-            return next;
-          });
-        }}
-      >
-        <MaterialIcons
-          name="shuffle"
-          size={24}
-          color={isShuffle ? '#1DB954' : '#fff'}
-        />
-      </TouchableOpacity>
 
-
+    <View
+      style={styles.seekContainer}
+      onLayout={(event) => {
+        seekBarWidthRef.current = event.nativeEvent.layout.width;
+      }}
+      onStartShouldSetResponder={() => true}
+      onResponderGrant={async (evt) => {
+        const x = evt.nativeEvent.locationX;
+        console.log('[Seek] responderGrant', { x, seekBarWidth: seekBarWidthRef.current, currentPosition, currentDuration });
+        seekToPosition(x);
+        try {
+          if (currentSong && currentDuration && seekBarWidthRef.current > 0) {
+            const nextPosition = Math.max(0, Math.min(currentDuration, (x / seekBarWidthRef.current) * currentDuration));
+            const t0 = Date.now();
+            await player.seek(currentSong, nextPosition).catch((e) => { console.warn('[Seek] immediate seek error', e); });
+            console.log('[Seek] responderGrant seek done', { nextPosition, tookMs: Date.now() - t0 });
+            // Mark that we already requested a native seek for this interaction
+            didImmediateSeekRef.current = true;
+            lastImmediateSeekRef.current = nextPosition;
+          }
+        } catch (e) {
+          console.warn('[Seek] responderGrant error', e);
+        }
+      }}
+      onResponderMove={(evt) => {
+        const x = evt.nativeEvent.locationX;
+        // log less frequently to avoid flooding: only when moved by >3px
+        seekToPosition(x);
+      }}
+      onResponderRelease={() => {
+        console.log('[Seek] responderRelease');
+        commitSeek();
+      }}
+      onResponderTerminate={() => {
+        console.log('[Seek] responderTerminate');
+        commitSeek();
+      }}
+    >
+      <View style={styles.seekTrack} />
+      <View
+        style={[
+          styles.seekProgress,
+          {
+            width:
+              currentDuration > 0
+                ? `${Math.min(100, Math.max(0, (displayPosition / currentDuration) * 100))}%`
+                : '0%',
+          },
+        ]}
+      />
+      <View
+        style={[
+          styles.seekThumb,
+          {
+            left:
+              currentDuration > 0
+                ? `${Math.min(100, Math.max(0, (displayPosition / currentDuration) * 100))}%`
+                : '0%',
+          },
+        ]}
+      />
+    </View>
   </View>
 )}
     </View>
@@ -327,7 +434,7 @@ const processVisibleItems = async () => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#121212', paddingTop: 50 },
   header: { fontSize: 24, color: '#fff', fontWeight: 'bold', textAlign: 'center', marginBottom: 20 },
-  button: { backgroundColor: '#1DB954', padding: 15, borderRadius: 25, marginHorizontal: 50, marginBottom: 20 },
+  button: { backgroundColor: '#7C3AED', padding: 15, borderRadius: 25, marginHorizontal: 50, marginBottom: 20 },
   buttonText: { color: '#fff', fontWeight: 'bold', textAlign: 'center' },
   songCard: { flexDirection: 'row', padding: 10, alignItems: 'center', borderBottomWidth: 0.5, borderBottomColor: '#333' },
   albumArt: { width: 50, height: 50, borderRadius: 5, backgroundColor: '#333' },
@@ -341,37 +448,73 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    height: 80,
+    minHeight: 118,
     backgroundColor: '#181818',
     borderTopColor: '#222',
     borderTopWidth: 1,
+    paddingTop: 10,
+    paddingHorizontal: 10,
+    paddingBottom: 10
+  },
+  playbackTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around',
-    paddingHorizontal: 10,
-    paddingBottom: 6
+    gap: 10,
   },
-  controlButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 8,
+  controlButtonSmall: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: 'transparent',
     borderWidth: 1,
     borderColor: '#2b2b2b',
     alignItems: 'center',
     justifyContent: 'center',
-    marginHorizontal: 6
+    marginHorizontal: 2
   },
-  controlText: {
-    fontSize: 14,
-    color: '#fff',
-    fontWeight: '600'
+  controlButtonLarge: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#7C3AED',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 2
+  },
+  seekContainer: {
+    height: 18,
+    marginTop: 10,
+    justifyContent: 'center',
+  },
+  seekTrack: {
+    height: 3,
+    borderRadius: 999,
+    backgroundColor: '#2b2b2b',
+    width: '100%',
+  },
+  seekProgress: {
+    position: 'absolute',
+    left: 0,
+    height: 3,
+    borderRadius: 999,
+    backgroundColor: '#7C3AED',
+  },
+  seekThumb: {
+    position: 'absolute',
+    top: 4,
+    width: 11,
+    height: 11,
+    marginLeft: -5.5,
+    borderRadius: 999,
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: '#7C3AED',
   },
   barCover: {
-  width: 50,
-  height: 50,
-  borderRadius: 6,
-  backgroundColor: '#333'
+    width: 42,
+    height: 42,
+    borderRadius: 6,
+    backgroundColor: '#333'
 },
 
 noCover: {
@@ -380,30 +523,30 @@ noCover: {
 
 barInfo: {
   flex: 1,
-  marginHorizontal: 10
+  marginHorizontal: 6
 },
 
 barTitle: {
   color: '#fff',
-  fontSize: 14,
+  fontSize: 13,
   fontWeight: 'bold'
 },
 
 barArtist: {
   color: '#aaa',
-  fontSize: 12
+  fontSize: 11
 },
 
 barTime: {
   color: '#8f8f8f',
-  fontSize: 11,
-  marginTop: 2
+  fontSize: 10,
+  marginTop: 1
 },
 
 barControls: {
   flexDirection: 'row',
   alignItems: 'center',
-  gap: 12
+  gap: 8
 },
 
 });

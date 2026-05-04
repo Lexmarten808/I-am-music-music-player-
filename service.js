@@ -1,5 +1,6 @@
 // Background playback service that handles system media controls.
 import TrackPlayer, { Event } from 'react-native-track-player';
+import Song from './classes/Song';
 
 // Returns the currently active track index, using whichever Track Player API
 // is available in the installed version.
@@ -34,30 +35,52 @@ export default async function playbackService() {
   // Skip to the next track, wrapping to the beginning of the queue if needed.
   TrackPlayer.addEventListener(Event.RemoteNext, async () => {
     try {
-      const queue = await TrackPlayer.getQueue();
-      if (!queue?.length) return;
+      if (typeof TrackPlayer.skipToNext === 'function') {
+        await TrackPlayer.skipToNext();
+        await TrackPlayer.play();
+      } else {
+        const queue = await TrackPlayer.getQueue();
+        if (!queue?.length) return;
 
-      const currentIndex = await getCurrentIndex();
-      if (currentIndex == null) return;
+        const currentIndex = await getCurrentIndex();
+        if (currentIndex == null) return;
 
-      const nextIndex = currentIndex + 1 < queue.length ? currentIndex + 1 : 0;
-      await TrackPlayer.skip(nextIndex);
-      await TrackPlayer.play();
+        const nextIndex = currentIndex + 1 < queue.length ? currentIndex + 1 : 0;
+        await TrackPlayer.skip(nextIndex);
+        await TrackPlayer.play();
+
+        const track = queue[nextIndex];
+        const song = track?.id ? Song.getSongById(track.id) : null;
+        if (song) {
+          Song.updateTrackMetadata(song).catch(() => {});
+        }
+      }
     } catch {}
   });
 
   // Skip to the previous track, wrapping to the end of the queue if needed.
   TrackPlayer.addEventListener(Event.RemotePrevious, async () => {
     try {
-      const queue = await TrackPlayer.getQueue();
-      if (!queue?.length) return;
+      if (typeof TrackPlayer.skipToPrevious === 'function') {
+        await TrackPlayer.skipToPrevious();
+        await TrackPlayer.play();
+      } else {
+        const queue = await TrackPlayer.getQueue();
+        if (!queue?.length) return;
 
-      const currentIndex = await getCurrentIndex();
-      if (currentIndex == null) return;
+        const currentIndex = await getCurrentIndex();
+        if (currentIndex == null) return;
 
-      const prevIndex = currentIndex - 1 >= 0 ? currentIndex - 1 : queue.length - 1;
-      await TrackPlayer.skip(prevIndex);
-      await TrackPlayer.play();
+        const prevIndex = currentIndex - 1 >= 0 ? currentIndex - 1 : queue.length - 1;
+        await TrackPlayer.skip(prevIndex);
+        await TrackPlayer.play();
+
+        const track = queue[prevIndex];
+        const song = track?.id ? Song.getSongById(track.id) : null;
+        if (song) {
+          Song.updateTrackMetadata(song).catch(() => {});
+        }
+      }
     } catch {}
   });
 

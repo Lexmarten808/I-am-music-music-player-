@@ -1,8 +1,6 @@
 // React Native Track Player for audio playback and notifications.
 import TrackPlayer, { Capability, Event, State } from 'react-native-track-player';
-// Platform detection for Android/iOS-specific code.
-import { Platform } from 'react-native';
-// Legacy FileSystem API for file operations and content URIs on Android.
+// FileSystem API for caching artwork to internal app cache.
 import * as FileSystem from 'expo-file-system/legacy';
 
 // Tracks whether the Track Player has been initialized.
@@ -69,10 +67,15 @@ async function ensurePlayableQueue(songs) {
   const signature = getQueueSignature(songs);
   if (playableQueueSignature === signature) return;
 
-  const queue = [];
-  for (const queueSong of songs) {
-    queue.push(await toTrack(queueSong, false));
-  }
+  const queue = songs.map(song => ({
+    id: String(song.id),
+    url: song.uri,
+    title: song.title,
+    artist: song.artist,
+    album: song.album,
+    artwork: undefined,
+    duration: song.duration || undefined,
+  }));
 
   await TrackPlayer.reset();
   await TrackPlayer.add(queue);
@@ -91,8 +94,9 @@ function hashString(value) {
   return hash.toString(16);
 }
 
-// Resolves artwork cover art to a usable file URI for Track Player notifications.
-// On Android, converts base64 data URIs to content:// URIs for better compatibility.
+// Resolves artwork cover art to a file URI in the app's internal cache.
+// FileSystem.cacheDirectory points to /data/user/0/com.app/cache/ (internal to app),
+// which MediaSession can access without permission issues.
 async function resolveArtworkUri(song) {
   try {
     // Return undefined if no cover art is available.
@@ -111,24 +115,23 @@ async function resolveArtworkUri(song) {
 
     // Generate a short, stable filename using hash.
     const key = hashString(song.id || song.uri || song.title || 'artwork');
-    const fileUri = `${FileSystem.cacheDirectory}artwork_${key}.${ext}`;
+    const fileName = `cover_${key}.${ext}`;
+    // Use Expo's internal cache directory (accessible by MediaSession).
+    const cacheDir = FileSystem.cacheDirectory ?? 'file:///data/user/0/com.yourapp/cache/';
+    const filePath = `${cacheDir}${fileName}`;
+    
     // Check if the cached file already exists.
-    const info = await FileSystem.getInfoAsync(fileUri);
+    const info = await FileSystem.getInfoAsync(filePath);
     // Write base64 artwork to cache directory if it doesn't exist.
     if (!info.exists) {
-      await FileSystem.writeAsStringAsync(fileUri, base64, {
+      await FileSystem.writeAsStringAsync(filePath, base64, {
         encoding: FileSystem.EncodingType.Base64,
       });
     }
-    // On Android, convert file URI to content:// URI for better system integration.
-    if (Platform.OS === 'android' && typeof FileSystem.getContentUriAsync === 'function') {
-      try {
-        return await FileSystem.getContentUriAsync(fileUri);
-      } catch {}
-    }
-    // Fall back to file URI if content URI conversion fails or not on Android.
-    return fileUri;
-  } catch {
+    // Return the file URI directly (points to /data/user/0/com.app/cache/).
+    return filePath;
+  } catch (e) {
+    console.error('resolveArtworkUri FAILED:', e);
     return undefined;
   }
 }
@@ -158,14 +161,21 @@ async function updateTrackMetadata(song) {
 
     // Resolve artwork to a file or content URI.
     const artwork = await resolveArtworkUri(song);
+    const queue = await TrackPlayer.getQueue();
+    const index = queue.findIndex(track => String(track.id) === String(song.id));
+
+    if (index < 0) return;
+
     // Update the track with new metadata.
-    await TrackPlayer.updateMetadataForTrack(String(song.id), {
+    await TrackPlayer.updateMetadataForTrack(index, {
       title: song.title,
       artist: song.artist,
       album: song.album,
       artwork,
     });
-  } catch {}
+  } catch (error) {
+    console.error('updateTrackMetadata error:', error);
+  }
 }
 
 // Ensures the Track Player is initialized and ready for playback.
@@ -280,8 +290,17 @@ function bindGlobalListeners() {
         song.isPlaying = false;
       }
     }
+
+    const activeSong = songRegistry.get(activeSongId);
+    if (activeSong) {
+      activeSong.isPlaying = true;
+      updateTrackMetadata(activeSong).catch(() => {});
+      notifyActiveSongChange(activeSongId, true, 0, activeSong.duration || 0);
+      return;
+    }
+
     // Notify UI of the track change.
-    notifyActiveSongChange(activeSongId);
+    notifyActiveSongChange(activeSongId, true);
   });
 
   // Mark listeners as bound to avoid re-binding.
@@ -294,6 +313,11 @@ export default class Song {
   static onActiveSongChange(listener) {
     activeSongListeners.add(listener);
     return () => activeSongListeners.delete(listener);
+  }
+
+  // Returns a registered Song instance by ID.
+  static getSongById(id) {
+    return songRegistry.get(String(id)) || null;
   }
 
   // Static wrapper to update an existing track's metadata in the player.
@@ -392,6 +416,7 @@ export default class Song {
         this.isPlaying = true;
         return;
       }
+       
 
       // Stop the previously active song.
       const previousSong = activeSongId ? songRegistry.get(activeSongId) : null;
@@ -399,10 +424,12 @@ export default class Song {
 
       // Get cached playable songs and this song's queue index.
       const { songs, targetIndex } = getPlayableSongInfo(this.id);
+
+      
       // If this song is not in the registry, add it as a standalone track.
       if (targetIndex < 0) {
         await TrackPlayer.reset();
-        await TrackPlayer.add(await toTrack(this, false));
+        await TrackPlayer.add(await toTrack(this, true));
       } else {
         await ensurePlayableQueue(songs);
         await TrackPlayer.skip(targetIndex);
@@ -417,7 +444,7 @@ export default class Song {
 
       // Refresh notification metadata after playback starts so cover art and
       // labels appear without blocking the initial tap-to-play path.
-      Song.updateTrackMetadata(this).catch(() => {});
+      Song.updateTrackMetadata(this).catch(error => console.error('updateTrackMetadata failed:', error));
     } catch (error) {
       console.error('Error en play():', error);
     }
