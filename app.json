@@ -2,7 +2,7 @@
   "expo": {
     "name": "I am music",
     "slug": "i-am-music",
-    "version": "1.0.0",
+    "version": "0.1.0",
     "icon": "./assets/app_icon_v1.png",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
