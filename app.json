@@ -3,6 +3,7 @@
     "name": "I am music",
     "slug": "i-am-music",
     "version": "1.0.0",
+    "icon": "./assets/app_icon_v1.png",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "assetBundlePatterns": [
@@ -24,7 +25,7 @@
         "FOREGROUND_SERVICE_AUDIO",
         "android.permission.WAKE_LOCK"
       ],
-      "package": "com.brandon_lasprilla.iammusic"
+      "package": "com.iammusic"
     },
     "web": {
       "plugins": [
@@ -35,13 +36,6 @@
       "expo-audio",
       "expo-video",
       "expo-sqlite",
-      [
-        "expo-av",
-        {
-          "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone",
-          "enableBackgroundAudio": true
-        }
-      ],
       "expo-font"
     ],
     "extra": {

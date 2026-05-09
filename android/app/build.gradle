@@ -130,6 +130,14 @@ android {
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
+    kotlinOptions {
+        jvmTarget = '17'
+        freeCompilerArgs += [
+            '-opt-in=kotlin.RequiresOptIn',
+            '-opt-in=expo.modules.kotlin.apifeatures.EitherType',
+            '-nowarn'
+        ]
+    }
 }
 
 // Apply static values from `gradle.properties` to the `android.packagingOptions`

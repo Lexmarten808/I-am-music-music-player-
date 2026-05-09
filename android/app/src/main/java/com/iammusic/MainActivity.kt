@@ -1,4 +1,4 @@
-package com.brandon_lasprilla.iammusic
+package com.iammusic
 
 import android.os.Build
 import android.os.Bundle
